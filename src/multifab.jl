@@ -42,8 +42,14 @@ at `mfi`, where `(i, j, k)` spans the full allocated `fab_box` (including ghost 
 in 0-based AMReX coordinates and `n` spans `1:n_comp(mf)`.
 """
 @inline function array4(mf::JlMultiFab, mfi::JlMFIter)
-    fbox = fab_box(mfi)
-    rx, ry, rz = bounds(fbox)
+    vbx = get_box(box_array(mf), index(mfi))
+    rx0, ry0, rz0 = bounds(vbx)
+    ngx = Int(n_grow(mf, Int32(0)))
+    ngy = Int(n_grow(mf, Int32(1)))
+    ngz = Int(n_grow(mf, Int32(2)))
+    rx = (first(rx0) - ngx):(last(rx0) + ngx)
+    ry = (first(ry0) - ngy):(last(ry0) + ngy)
+    rz = (first(rz0) - ngz):(last(rz0) + ngz)
     nx, ny, nz = length(rx), length(ry), length(rz)
     nc = Int(n_comp(mf))
     ptr = data_ptr(mfi, mf).cpp_object
@@ -58,8 +64,14 @@ Return a zero-copy 4D `OffsetArray` view `(i, j, k, n)` over the local `IArrayBo
 at `mfi`, where `(i, j, k)` spans `fab_box(mfi)` and `n` spans `1:n_comp(imf)`.
 """
 @inline function iarray4(imf::JliMultiFab, mfi::JlMFIter)
-    fbox = fab_box(mfi)
-    rx, ry, rz = bounds(fbox)
+    vbx = get_box(box_array(imf), index(mfi))
+    rx0, ry0, rz0 = bounds(vbx)
+    ngx = Int(n_grow(imf, Int32(0)))
+    ngy = Int(n_grow(imf, Int32(1)))
+    ngz = Int(n_grow(imf, Int32(2)))
+    rx = (first(rx0) - ngx):(last(rx0) + ngx)
+    ry = (first(ry0) - ngy):(last(ry0) + ngy)
+    rz = (first(rz0) - ngz):(last(rz0) + ngz)
     nx, ny, nz = length(rx), length(ry), length(rz)
     nc = Int(n_comp(imf))
     ptr = idata_ptr(mfi, imf).cpp_object
@@ -101,4 +113,71 @@ function each_fab(f::F, imf::JliMultiFab; tiling::Bool=false) where {F}
         close!(mfi)
     end
     return nothing
+end
+
+@inline n_grow(mf::JlMultiFab) = Int(n_grow(mf, Int32(0)))
+@inline n_grow(imf::JliMultiFab) = Int(n_grow(imf, Int32(0)))
+
+@inline function copy!(dst::JlMultiFab, src::JlMultiFab,
+                       scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+    copy_from!(dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp), Int32(nghost))
+    return dst
+end
+
+@inline function plus!(dst::JlMultiFab, src::JlMultiFab,
+                       scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+    add_from!(dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp), Int32(nghost))
+    return dst
+end
+
+@inline function scale!(mf::JlMultiFab, val::Real)
+    mult_val!(mf, Float64(val), Int32(0), n_comp(mf), n_grow(mf, Int32(0)))
+    return mf
+end
+
+function saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab,
+                scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+    af = Float64(a)
+    sc = Int(scomp)
+    dc = Int(dcomp)
+    nc = Int(ncomp)
+    ng = Int(nghost)
+    each_fab(dst) do mfi, vbx, d_arr
+        s_arr = array4(src, mfi)
+        rx0, ry0, rz0 = bounds(vbx)
+        frx, fry, frz = axes(d_arr)[1:3]
+        rx = max(first(frx), first(rx0) - ng):min(last(frx), last(rx0) + ng)
+        ry = max(first(fry), first(ry0) - ng):min(last(fry), last(ry0) + ng)
+        rz = max(first(frz), first(rz0) - ng):min(last(frz), last(rz0) + ng)
+        @inbounds for c in 1:nc, k in rz, j in ry, i in rx
+            d_arr[i, j, k, dc + c] += af * s_arr[i, j, k, sc + c]
+        end
+    end
+    return dst
+end
+
+function lincomb!(dst::JlMultiFab,
+                  a::Real, x::JlMultiFab, xcomp::Integer,
+                  b::Real, y::JlMultiFab, ycomp::Integer,
+                  dcomp::Integer, ncomp::Integer, nghost::Integer)
+    af = Float64(a)
+    bf = Float64(b)
+    xc = Int(xcomp)
+    yc = Int(ycomp)
+    dc = Int(dcomp)
+    nc = Int(ncomp)
+    ng = Int(nghost)
+    each_fab(dst) do mfi, vbx, d_arr
+        x_arr = array4(x, mfi)
+        y_arr = array4(y, mfi)
+        rx0, ry0, rz0 = bounds(vbx)
+        frx, fry, frz = axes(d_arr)[1:3]
+        rx = max(first(frx), first(rx0) - ng):min(last(frx), last(rx0) + ng)
+        ry = max(first(fry), first(ry0) - ng):min(last(fry), last(ry0) + ng)
+        rz = max(first(frz), first(rz0) - ng):min(last(frz), last(rz0) + ng)
+        @inbounds for c in 1:nc, k in rz, j in ry, i in rx
+            d_arr[i, j, k, dc + c] = af * x_arr[i, j, k, xc + c] + bf * y_arr[i, j, k, yc + c]
+        end
+    end
+    return dst
 end

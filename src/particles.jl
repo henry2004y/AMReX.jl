@@ -144,3 +144,12 @@ function each_particle_tile(f::F, pc::JlParticleContainer, lev::Integer=0) where
     end
     return nothing
 end
+
+@inline redistribute!(pc::JlParticleContainer; lev_min::Integer=0, lev_max::Integer=-1, ngrow::Integer=0) =
+    redistribute!(pc, Int32(lev_min), Int32(lev_max), Int32(ngrow))
+
+@inline total_number_of_particles(pc::JlParticleContainer; only_valid::Bool=true, local_only::Bool=false) =
+    total_number_of_particles(pc, only_valid, local_only)
+
+@inline number_of_particles_at_level(pc::JlParticleContainer, lev::Integer; only_valid::Bool=true, local_only::Bool=false) =
+    number_of_particles_at_level(pc, Int32(lev), only_valid, local_only)

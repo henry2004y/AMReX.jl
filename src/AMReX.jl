@@ -54,6 +54,8 @@ include("amrcore.jl")
 include("particles.jl")
 include("io.jl")
 
+amrex_init() = amrex_init(false)
+
 export amrex_init, amrex_initialized, amrex_finalize
 export parallel_myproc, parallel_nprocs, parallel_ioprocessor, parallel_barrier
 export parallel_reduce_sum_real, parallel_reduce_max_real, parallel_reduce_min_real
@@ -70,14 +72,16 @@ export JlDistributionMapping, DistributionMapping, get_rank
 export JlMultiFab, MultiFab, JliMultiFab, iMultiFab, JlMFIter
 export n_comp, n_grow, local_size, box_array, dmap
 export set_val!, set_val_comp!, plus_val!, mult_val!, add_from!, copy_from!, parallel_copy_from!
+export copy!, plus!, scale!, saxpy!, lincomb!
 export fill_boundary!, fill_boundary_comp!, sum_boundary!, sum_boundary_comp!
 export min_val, max_val, norm0, norm1, norm2, sum_val
-export is_valid, next!, close!, index, local_tile_index, valid_box, tile_box, fab_box
+export is_valid, next!, close!, index, grid_index, local_tile_index, valid_box, tile_box, fab_box
 export array4, iarray4, each_fab
 
 export JlAmrCore, AmrCore, InterpType, CellConservativeLinear, NodeBilinear, PiecewiseConstant, CellQuadratic
-export add_refine_box!, clear_refine_boxes!, init_from_scratch!, regrid_levels!
-export finest_level, max_level, geom, node_box_array, ref_ratio, ref_ratio_tuple
+export add_refine_box!, add_tag_box!, clear_refine_boxes!, init_from_scratch!, regrid_levels!
+export finest_level, max_level, geom, geometry, dmap, dist_map, node_box_array, ref_ratio, ref_ratio_tuple
+export mpi_rank, parallel_reduce_sum
 export set_box_array!, set_dmap!, set_finest_level!
 export interp_from_coarse_to_fine!, fill_patch_single_level!, fill_patch_two_levels!
 export average_down!, average_down_nodal!, sum_fine_to_coarse_nodal!

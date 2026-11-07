@@ -51,3 +51,12 @@ Return the 3D refinement ratio between `lev` and `lev + 1`.
         Int(ref_ratio(amr, Int32(lev), Int32(2))),
     )
 end
+
+@inline add_tag_box!(amr::JlAmrCore, xlo::Real, ylo::Real, zlo::Real, xhi::Real, yhi::Real, zhi::Real) =
+    add_refine_box!(amr, Float64(xlo), Float64(ylo), Float64(zlo), Float64(xhi), Float64(yhi), Float64(zhi))
+
+@inline geometry(amr::JlAmrCore, lev::Integer=0) = geom(amr, Int32(lev))
+@inline dist_map(amr::JlAmrCore, lev::Integer=0) = dmap(amr, Int32(lev))
+@inline mpi_rank() = Int(parallel_myproc())
+@inline grid_index(it) = Int(index(it))
+@inline parallel_reduce_sum(x::Real) = parallel_reduce_sum_real(Float64(x))
