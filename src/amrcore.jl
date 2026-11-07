@@ -52,8 +52,8 @@ Return the 3D refinement ratio between `lev` and `lev + 1`.
     )
 end
 
-@inline add_tag_box!(amr::JlAmrCore, xlo::Real, ylo::Real, zlo::Real, xhi::Real, yhi::Real, zhi::Real) =
-    add_refine_box!(amr, Float64(xlo), Float64(ylo), Float64(zlo), Float64(xhi), Float64(yhi), Float64(zhi))
+@inline add_tag_box!(amr::JlAmrCore, xlo::Real, ylo::Real, zlo::Real, xhi::Real, yhi::Real, zhi::Real; lev::Integer=0) =
+    add_refine_box!(amr, Int32(lev), Float64(xlo), Float64(ylo), Float64(zlo), Float64(xhi), Float64(yhi), Float64(zhi))
 
 @inline geometry(amr::JlAmrCore, lev::Integer=0) = geom(amr, Int32(lev))
 @inline dist_map(amr::JlAmrCore, lev::Integer=0) = dmap(amr, Int32(lev))
