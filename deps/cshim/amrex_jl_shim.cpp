@@ -190,6 +190,12 @@ struct JlMultiFab {
         : mf(std::make_unique<amrex::MultiFab>(
               ba.ba, dm.dm, ncomp, amrex::IntVect(ngx, ngy, ngz))) {}
 
+    ~JlMultiFab() {
+        if (!amrex::Initialized()) {
+            mf.release();
+        }
+    }
+
     int n_comp() const { return mf->nComp(); }
     int n_grow(int dir) const { return mf->nGrow(dir); }
     int64_t size() const { return mf->size(); }
@@ -260,6 +266,12 @@ struct JliMultiFab {
         : imf(std::make_unique<amrex::iMultiFab>(
               ba.ba, dm.dm, ncomp, amrex::IntVect(ngx, ngy, ngz))) {}
 
+    ~JliMultiFab() {
+        if (!amrex::Initialized()) {
+            imf.release();
+        }
+    }
+
     int n_comp() const { return imf->nComp(); }
     int n_grow(int dir) const { return imf->nGrow(dir); }
     int64_t size() const { return imf->size(); }
@@ -300,6 +312,19 @@ struct JlMFIter {
     JlBox tile_box() const { return JlBox(mfi->tilebox()); }
     JlBox fab_box() const { return JlBox(mfi->fabbox()); }
 
+    int fab_lo(const JlMultiFab& mf, int dir) const {
+        return (*mf.mf)[*mfi].box().smallEnd(dir);
+    }
+    int fab_hi(const JlMultiFab& mf, int dir) const {
+        return (*mf.mf)[*mfi].box().bigEnd(dir);
+    }
+    int ifab_lo(const JliMultiFab& imf, int dir) const {
+        return (*imf.imf)[*mfi].box().smallEnd(dir);
+    }
+    int ifab_hi(const JliMultiFab& imf, int dir) const {
+        return (*imf.imf)[*mfi].box().bigEnd(dir);
+    }
+
     double* data_ptr(JlMultiFab& mf) const {
         return (*mf.mf)[*mfi].dataPtr();
     }
@@ -312,7 +337,7 @@ struct JlMFIter {
 // AmrCore subclass for multi-level AMR hierarchy management
 // ============================================================================
 
-class JlAmrCore : public amrex::AmrCore {
+class AmrCoreImpl : public amrex::AmrCore {
 private:
     static amrex::Geometry make_base_geom(const JlRealBox& rb, int nx, int ny, int nz,
                                           int coord, bool px, bool py, bool pz) {
@@ -338,15 +363,14 @@ private:
     }
 
 public:
-    // Per-level list of physical refinement boxes
     std::vector<std::vector<amrex::RealBox>> refine_boxes;
 
-    JlAmrCore(const JlRealBox& rb, int max_level_in,
-              int nx, int ny, int nz, int coord,
-              bool px, bool py, bool pz,
-              int max_grid_x, int max_grid_y, int max_grid_z,
-              int block_x, int block_y, int block_z,
-              double grid_eff)
+    AmrCoreImpl(const JlRealBox& rb, int max_level_in,
+                int nx, int ny, int nz, int coord,
+                bool px, bool py, bool pz,
+                int max_grid_x, int max_grid_y, int max_grid_z,
+                int block_x, int block_y, int block_z,
+                double grid_eff)
         : amrex::AmrCore(
               make_base_geom(rb, nx, ny, nz, coord, px, py, pz),
               make_amr_info(max_level_in, nz, max_grid_x, max_grid_y, max_grid_z,
@@ -354,44 +378,11 @@ public:
         refine_boxes.resize(std::max(1, max_level_in));
     }
 
-    ~JlAmrCore() override = default;
+    ~AmrCoreImpl() override = default;
 
-    void add_refine_box(int lev, double xlo, double ylo, double zlo,
-                        double xhi, double yhi, double zhi) {
-        if (lev >= 0 && lev < static_cast<int>(refine_boxes.size())) {
-            refine_boxes[lev].emplace_back(
-                amrex::RealBox({xlo, ylo, zlo}, {xhi, yhi, zhi}));
-        }
-    }
-
-    void clear_refine_boxes() {
-        for (auto& v : refine_boxes) {
-            v.clear();
-        }
-    }
-
-    void init_from_scratch(double time) { InitFromScratch(time); }
-    void regrid_levels(int base_lev, double time) { regrid(base_lev, time); }
-
-    int get_finest_level() const { return finestLevel(); }
-    int get_max_level() const { return maxLevel(); }
-    JlGeometry get_geom(int lev) const { return JlGeometry(Geom(lev)); }
-    JlBoxArray get_box_array(int lev) const { return JlBoxArray(boxArray(lev)); }
-    JlBoxArray get_node_box_array(int lev) const {
-        return JlBoxArray(amrex::convert(boxArray(lev), amrex::IntVect::TheNodeVector()));
-    }
-    JlDistributionMapping get_dmap(int lev) const {
-        return JlDistributionMapping(DistributionMap(lev));
-    }
-    int get_ref_ratio(int lev, int dir) const {
-        return (lev < maxLevel()) ? refRatio(lev)[dir] : 1;
-    }
-
-    void set_box_array(int lev, const JlBoxArray& ba) { SetBoxArray(lev, ba.ba); }
-    void set_dmap(int lev, const JlDistributionMapping& dm) {
-        SetDistributionMap(lev, dm.dm);
-    }
-    void set_finest_level(int lev) { SetFinestLevel(lev); }
+    void set_box_array_pub(int lev, const amrex::BoxArray& ba) { SetBoxArray(lev, ba); }
+    void set_dmap_pub(int lev, const amrex::DistributionMapping& dm) { SetDistributionMap(lev, dm); }
+    void set_finest_level_pub(int lev) { SetFinestLevel(lev); }
 
 protected:
     void MakeNewLevelFromScratch(int lev, amrex::Real /*time*/,
@@ -434,7 +425,6 @@ protected:
                     for (int i = lo.x; i <= hi.x; ++i) {
                         amrex::Real xyz[3];
                         geom_lev.CellCenter({i, j, k}, xyz);
-                        // Tag if cell center is inside refine_boxes for any target level >= lev
                         for (int rlev = lev; rlev < static_cast<int>(refine_boxes.size()); ++rlev) {
                             for (const auto& rbox : refine_boxes[rlev]) {
                                 if (rbox.contains(xyz)) {
@@ -447,6 +437,63 @@ protected:
             }
         }
     }
+};
+
+struct JlAmrCore {
+    std::unique_ptr<AmrCoreImpl> core;
+
+    JlAmrCore(const JlRealBox& rb, int max_level_in,
+              int nx, int ny, int nz, int coord,
+              bool px, bool py, bool pz,
+              int max_grid_x, int max_grid_y, int max_grid_z,
+              int block_x, int block_y, int block_z,
+              double grid_eff)
+        : core(std::make_unique<AmrCoreImpl>(
+              rb, max_level_in, nx, ny, nz, coord, px, py, pz,
+              max_grid_x, max_grid_y, max_grid_z, block_x, block_y, block_z, grid_eff)) {}
+
+    ~JlAmrCore() {
+        if (!amrex::Initialized()) {
+            core.release();
+        }
+    }
+
+    void add_refine_box(int lev, double xlo, double ylo, double zlo,
+                        double xhi, double yhi, double zhi) {
+        if (lev >= 0 && lev < static_cast<int>(core->refine_boxes.size())) {
+            core->refine_boxes[lev].emplace_back(
+                amrex::RealBox({xlo, ylo, zlo}, {xhi, yhi, zhi}));
+        }
+    }
+
+    void clear_refine_boxes() {
+        for (auto& v : core->refine_boxes) {
+            v.clear();
+        }
+    }
+
+    void init_from_scratch(double time) { core->InitFromScratch(time); }
+    void regrid_levels(int base_lev, double time) { core->regrid(base_lev, time); }
+
+    int get_finest_level() const { return core->finestLevel(); }
+    int get_max_level() const { return core->maxLevel(); }
+    JlGeometry get_geom(int lev) const { return JlGeometry(core->Geom(lev)); }
+    JlBoxArray get_box_array(int lev) const { return JlBoxArray(core->boxArray(lev)); }
+    JlBoxArray get_node_box_array(int lev) const {
+        return JlBoxArray(amrex::convert(core->boxArray(lev), amrex::IntVect::TheNodeVector()));
+    }
+    JlDistributionMapping get_dmap(int lev) const {
+        return JlDistributionMapping(core->DistributionMap(lev));
+    }
+    int get_ref_ratio(int lev, int dir) const {
+        return (lev < core->maxLevel()) ? core->refRatio(lev)[dir] : 1;
+    }
+
+    void set_box_array(int lev, const JlBoxArray& ba) { core->set_box_array_pub(lev, ba.ba); }
+    void set_dmap(int lev, const JlDistributionMapping& dm) {
+        core->set_dmap_pub(lev, dm.dm);
+    }
+    void set_finest_level(int lev) { core->set_finest_level_pub(lev); }
 };
 
 // ============================================================================
@@ -464,7 +511,7 @@ struct JlParticleContainer {
     int num_runtime_int = 0;
 
     JlParticleContainer(JlAmrCore& amr_core, int n_rt_real, int n_rt_int)
-        : pc(std::make_unique<PureSoAParticleContainer>(&amr_core)),
+        : pc(std::make_unique<PureSoAParticleContainer>(amr_core.core.get())),
           num_runtime_real(n_rt_real),
           num_runtime_int(n_rt_int) {
         pc->SetSoACompileTimeNames({"x", "y", "z"}, {});
@@ -496,6 +543,12 @@ struct JlParticleContainer {
         }
         pc->reserveData();
         pc->resizeData();
+    }
+
+    ~JlParticleContainer() {
+        if (!amrex::Initialized()) {
+            pc.release();
+        }
     }
 
     void reserve_and_resize_data() {
@@ -761,6 +814,10 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("valid_box", &JlMFIter::valid_box)
         .method("tile_box", &JlMFIter::tile_box)
         .method("fab_box", &JlMFIter::fab_box)
+        .method("fab_lo", &JlMFIter::fab_lo)
+        .method("fab_hi", &JlMFIter::fab_hi)
+        .method("ifab_lo", &JlMFIter::ifab_lo)
+        .method("ifab_hi", &JlMFIter::ifab_hi)
         .method("data_ptr", &JlMFIter::data_ptr)
         .method("idata_ptr", &JlMFIter::idata_ptr);
 

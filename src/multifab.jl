@@ -42,14 +42,9 @@ at `mfi`, where `(i, j, k)` spans the full allocated `fab_box` (including ghost 
 in 0-based AMReX coordinates and `n` spans `1:n_comp(mf)`.
 """
 @inline function array4(mf::JlMultiFab, mfi::JlMFIter)
-    vbx = get_box(box_array(mf), index(mfi))
-    rx0, ry0, rz0 = bounds(vbx)
-    ngx = Int(n_grow(mf, Int32(0)))
-    ngy = Int(n_grow(mf, Int32(1)))
-    ngz = Int(n_grow(mf, Int32(2)))
-    rx = (first(rx0) - ngx):(last(rx0) + ngx)
-    ry = (first(ry0) - ngy):(last(ry0) + ngy)
-    rz = (first(rz0) - ngz):(last(rz0) + ngz)
+    rx = Int(fab_lo(mfi, mf, Int32(0))):Int(fab_hi(mfi, mf, Int32(0)))
+    ry = Int(fab_lo(mfi, mf, Int32(1))):Int(fab_hi(mfi, mf, Int32(1)))
+    rz = Int(fab_lo(mfi, mf, Int32(2))):Int(fab_hi(mfi, mf, Int32(2)))
     nx, ny, nz = length(rx), length(ry), length(rz)
     nc = Int(n_comp(mf))
     ptr = data_ptr(mfi, mf).cpp_object
@@ -64,14 +59,9 @@ Return a zero-copy 4D `OffsetArray` view `(i, j, k, n)` over the local `IArrayBo
 at `mfi`, where `(i, j, k)` spans `fab_box(mfi)` and `n` spans `1:n_comp(imf)`.
 """
 @inline function iarray4(imf::JliMultiFab, mfi::JlMFIter)
-    vbx = get_box(box_array(imf), index(mfi))
-    rx0, ry0, rz0 = bounds(vbx)
-    ngx = Int(n_grow(imf, Int32(0)))
-    ngy = Int(n_grow(imf, Int32(1)))
-    ngz = Int(n_grow(imf, Int32(2)))
-    rx = (first(rx0) - ngx):(last(rx0) + ngx)
-    ry = (first(ry0) - ngy):(last(ry0) + ngy)
-    rz = (first(rz0) - ngz):(last(rz0) + ngz)
+    rx = Int(ifab_lo(mfi, imf, Int32(0))):Int(ifab_hi(mfi, imf, Int32(0)))
+    ry = Int(ifab_lo(mfi, imf, Int32(1))):Int(ifab_hi(mfi, imf, Int32(1)))
+    rz = Int(ifab_lo(mfi, imf, Int32(2))):Int(ifab_hi(mfi, imf, Int32(2)))
     nx, ny, nz = length(rx), length(ry), length(rz)
     nc = Int(n_comp(imf))
     ptr = idata_ptr(mfi, imf).cpp_object

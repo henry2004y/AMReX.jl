@@ -1,5 +1,21 @@
 using Test
 using AMReX
+using Aqua
+
+@testset "Code Quality & Hygiene (Aqua.jl)" begin
+    Aqua.test_all(
+        AMReX;
+        ambiguities=false,
+        piracies=false,
+        stale_deps=false,
+        persistent_tasks=false,
+        deps_compat=(check_extras=false, ignore=[:Libdl])
+    )
+    own_piracies = filter(Aqua.Piracy.hunt(AMReX)) do m
+        !occursin("CxxWrap", string(m.sig))
+    end
+    @test isempty(own_piracies)
+end
 
 amrex_init(false)
 
@@ -81,10 +97,24 @@ try
             sum_boundary!(mf_sum, geom)
             @test sum_val(mf_sum, Int32(0), false) ≈ 5.5
 
-            # Test iMultiFab bitmasks
+            # Test iMultiFab bitmasks & type-stability (@inferred)
             imf = iMultiFab(ba, dm, 1, 1)
             set_val!(imf, Int32(3))
             @test min_val(imf, Int32(0), Int32(0)) == 3
+            @test mf isa JlMultiFabAllocated
+            @test imf isa JliMultiFabAllocated
+
+            mfi = JlMFIter(mf, false)
+            @test @inferred(array4(mf, mfi)) isa AbstractArray{Float64, 4}
+            close!(mfi)
+
+            imfi = JlMFIter(imf, false)
+            @test @inferred(iarray4(imf, imfi)) isa AbstractArray{Int32, 4}
+            close!(imfi)
+
+            @test @inferred(pack_idcpu(Int64(10), 0)) isa UInt64
+            @test @inferred(unpack_id(pack_idcpu(Int64(10), 0))) == 10
+            @test @inferred(unpack_cpu(pack_idcpu(Int64(10), 2))) == 2
         end
 
         @testset "AmrCore Multi-Level Hierarchy & FillPatchTwoLevels" begin
