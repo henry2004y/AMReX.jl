@@ -1,0 +1,8 @@
+Manifest.toml
+deps/build/
+deps/lib/
+*.o
+*.so
+plt*
+chk*
+Backtrace.*
