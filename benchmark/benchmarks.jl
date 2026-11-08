@@ -14,9 +14,9 @@ SUITE["idcpu"] = BenchmarkGroup(["bitmask", "particles"])
 let
     w = pack_idcpu(Int64(1234567), 3)
     SUITE["idcpu"]["pack_idcpu"] = @benchmarkable pack_idcpu($(Int64(1234567)), $(Int32(3)))
-    SUITE["idcpu"]["unpack_id"]  = @benchmarkable unpack_id($w)
+    SUITE["idcpu"]["unpack_id"] = @benchmarkable unpack_id($w)
     SUITE["idcpu"]["unpack_cpu"] = @benchmarkable unpack_cpu($w)
-    SUITE["idcpu"]["is_valid"]   = @benchmarkable is_valid_idcpu($w)
+    SUITE["idcpu"]["is_valid"] = @benchmarkable is_valid_idcpu($w)
 end
 
 # ----------------------------------------------------------------------------
@@ -26,15 +26,15 @@ SUITE["multifab"] = BenchmarkGroup(["field", "halo"])
 let
     bx = Box(0, 0, 0, 31, 31, 7)
     rb = RealBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-    geom = Geometry(bx, rb; is_periodic=(true, true, true))
-    ba = BoxArray(bx; max_grid_size=(16, 16, 8))
+    geom = Geometry(bx, rb; is_periodic = (true, true, true))
+    ba = BoxArray(bx; max_grid_size = (16, 16, 8))
     dm = DistributionMapping(ba)
 
     mf_a = MultiFab(ba, dm, 3, 2)
     mf_b = MultiFab(ba, dm, 3, 2)
     mf_c = MultiFab(ba, dm, 3, 2)
     set_val!(mf_a, 1.25)
-    set_val!(mf_b, 2.50)
+    set_val!(mf_b, 2.5)
     set_val!(mf_c, 0.0)
 
     SUITE["multifab"]["each_fab_array4"] = @benchmarkable begin
@@ -57,9 +57,9 @@ end
 SUITE["particles"] = BenchmarkGroup(["soa", "particles"])
 let
     rb = RealBox(0.0, 0.0, 0.0, 8.0, 8.0, 1.0)
-    amr = AmrCore(rb, (16, 16, 1); max_level=0, max_grid_size=(8, 8, 1))
+    amr = AmrCore(rb, (16, 16, 1); max_level = 0, max_grid_size = (8, 8, 1))
     init_from_scratch!(amr, 0.0)
-    pc = ParticleContainer(amr; n_real=4, n_int=1)
+    pc = ParticleContainer(amr; n_real = 4, n_int = 1)
     mf_dummy = MultiFab(box_array(amr, Int32(0)), dmap(amr, Int32(0)), 1, 0)
     my_cpu = parallel_myproc()
 
@@ -96,4 +96,3 @@ let
         s
     end
 end
-

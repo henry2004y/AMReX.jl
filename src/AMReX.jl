@@ -42,8 +42,8 @@ build), and recompile the C++ shim library.
 function set_amrex_prefix!(amrex_prefix::Union{Nothing, String})
     @set_preferences!("amrex_prefix" => amrex_prefix)
     include(joinpath(@__DIR__, "..", "deps", "build.jl"))
-    Base.invokelatest(build_cshim; custom_amrex_prefix=amrex_prefix)
-    @info "Updated AMReX prefix preference to $(something(amrex_prefix, "AMReX_jll default")). Restart Julia for changes to take effect."
+    Base.invokelatest(build_cshim; custom_amrex_prefix = amrex_prefix)
+    return @info "Updated AMReX prefix preference to $(something(amrex_prefix, "AMReX_jll default")). Restart Julia for changes to take effect."
 end
 
 import Base: length, size, contains
@@ -57,7 +57,7 @@ function __init__()
             push!(Libdl.DL_LOAD_PATH, libdir)
         end
     end
-    @initcxx
+    return @initcxx
 end
 
 include("box_geometry.jl")

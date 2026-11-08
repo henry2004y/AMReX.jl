@@ -1,8 +1,10 @@
 using AMReX_jll
 using CxxWrap
 
-function build_cshim(; custom_amrex_prefix::Union{Nothing, String}=nothing,
-                     cxx::String=get(ENV, "CXX", "g++"))
+function build_cshim(;
+        custom_amrex_prefix::Union{Nothing, String} = nothing,
+        cxx::String = get(ENV, "CXX", "g++")
+    )
     deps_dir = @__DIR__
     src_file = joinpath(deps_dir, "cshim", "amrex_jl_shim.cpp")
     lib_dir = joinpath(deps_dir, "lib")

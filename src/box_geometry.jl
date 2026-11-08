@@ -7,12 +7,16 @@
 
 Construct a 3D `JlBox` with inclusive 0-based bounds `(lox:hix, loy:hiy, loz:hiz)`.
 """
-function Box(lox::Integer, loy::Integer, loz::Integer,
-             hix::Integer, hiy::Integer, hiz::Integer;
-             nodal::NTuple{3, Bool}=(false, false, false))
-    return JlBox(Int32(lox), Int32(loy), Int32(loz),
-                 Int32(hix), Int32(hiy), Int32(hiz),
-                 Int32(nodal[1]), Int32(nodal[2]), Int32(nodal[3]))
+function Box(
+        lox::Integer, loy::Integer, loz::Integer,
+        hix::Integer, hiy::Integer, hiz::Integer;
+        nodal::NTuple{3, Bool} = (false, false, false)
+    )
+    return JlBox(
+        Int32(lox), Int32(loy), Int32(loz),
+        Int32(hix), Int32(hiy), Int32(hiz),
+        Int32(nodal[1]), Int32(nodal[2]), Int32(nodal[3])
+    )
 end
 
 """
@@ -21,9 +25,11 @@ end
 Return the inclusive index ranges `(lox:hix, loy:hiy, loz:hiz)` of `bx`.
 """
 @inline function bounds(bx::JlBox)
-    return (Int(lo(bx, 0)):Int(hi(bx, 0)),
-            Int(lo(bx, 1)):Int(hi(bx, 1)),
-            Int(lo(bx, 2)):Int(hi(bx, 2)))
+    return (
+        Int(lo(bx, 0)):Int(hi(bx, 0)),
+        Int(lo(bx, 1)):Int(hi(bx, 1)),
+        Int(lo(bx, 2)):Int(hi(bx, 2)),
+    )
 end
 
 """
@@ -31,10 +37,14 @@ end
 
 Construct a physical domain bounding box `[xlo, xhi] × [ylo, yhi] × [zlo, zhi]`.
 """
-function RealBox(xlo::Real, ylo::Real, zlo::Real,
-                 xhi::Real, yhi::Real, zhi::Real)
-    return JlRealBox(Float64(xlo), Float64(ylo), Float64(zlo),
-                     Float64(xhi), Float64(yhi), Float64(zhi))
+function RealBox(
+        xlo::Real, ylo::Real, zlo::Real,
+        xhi::Real, yhi::Real, zhi::Real
+    )
+    return JlRealBox(
+        Float64(xlo), Float64(ylo), Float64(zlo),
+        Float64(xhi), Float64(yhi), Float64(zhi)
+    )
 end
 
 """
@@ -42,11 +52,15 @@ end
 
 Construct an AMReX `JlGeometry` mapping index space `domain` to physical space `rbox`.
 """
-function Geometry(dom::JlBox, rb::JlRealBox;
-                  coord::Integer=0,
-                  is_periodic::NTuple{3, Bool}=(true, true, true))
-    return JlGeometry(dom, rb, Int32(coord),
-                      is_periodic[1], is_periodic[2], is_periodic[3])
+function Geometry(
+        dom::JlBox, rb::JlRealBox;
+        coord::Integer = 0,
+        is_periodic::NTuple{3, Bool} = (true, true, true)
+    )
+    return JlGeometry(
+        dom, rb, Int32(coord),
+        is_periodic[1], is_periodic[2], is_periodic[3]
+    )
 end
 
 """
@@ -98,7 +112,7 @@ Return the upper physical coordinates `(xhi, yhi, zhi)` of the problem domain.
 
 Construct a `JlBoxArray` from a domain box and optionally chop into sub-boxes of `max_grid_size`.
 """
-function BoxArray(dom::JlBox; max_grid_size::Union{Nothing, Int, NTuple{3, Int}}=nothing)
+function BoxArray(dom::JlBox; max_grid_size::Union{Nothing, Int, NTuple{3, Int}} = nothing)
     ba = JlBoxArray(dom)
     if max_grid_size isa Int
         max_size!(ba, Int32(max_grid_size), Int32(max_grid_size), Int32(max_grid_size))
@@ -113,7 +127,7 @@ end
 
 Convert a cell-centered `BoxArray` to nodal along the specified directions.
 """
-function nodal_box_array(ba::JlBoxArray; dirs::NTuple{3, Bool}=(true, true, true))
+function nodal_box_array(ba::JlBoxArray; dirs::NTuple{3, Bool} = (true, true, true))
     return convert_to_nodal(ba, Int32(dirs[1]), Int32(dirs[2]), Int32(dirs[3]))
 end
 
@@ -123,4 +137,3 @@ end
 Construct an AMReX `JlDistributionMapping` for `ba`.
 """
 DistributionMapping(ba::JlBoxArray) = JlDistributionMapping(ba)
-

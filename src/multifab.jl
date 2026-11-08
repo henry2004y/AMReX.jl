@@ -7,15 +7,21 @@
 
 Allocate an AMReX `JlMultiFab` (`Float64`) with `ncomp` components and `nghost` guard cells.
 """
-function MultiFab(ba::JlBoxArray, dm::JlDistributionMapping,
-                  ncomp::Integer, nghost::Integer)
+function MultiFab(
+        ba::JlBoxArray, dm::JlDistributionMapping,
+        ncomp::Integer, nghost::Integer
+    )
     return JlMultiFab(ba, dm, Int32(ncomp), Int32(nghost))
 end
 
-function MultiFab(ba::JlBoxArray, dm::JlDistributionMapping,
-                  ncomp::Integer, nghost::NTuple{3, Integer})
-    return JlMultiFab(ba, dm, Int32(ncomp),
-                      Int32(nghost[1]), Int32(nghost[2]), Int32(nghost[3]))
+function MultiFab(
+        ba::JlBoxArray, dm::JlDistributionMapping,
+        ncomp::Integer, nghost::NTuple{3, Integer}
+    )
+    return JlMultiFab(
+        ba, dm, Int32(ncomp),
+        Int32(nghost[1]), Int32(nghost[2]), Int32(nghost[3])
+    )
 end
 
 """
@@ -23,15 +29,21 @@ end
 
 Allocate an AMReX `JliMultiFab` (`Int32`) with `ncomp` components and `nghost` guard cells.
 """
-function iMultiFab(ba::JlBoxArray, dm::JlDistributionMapping,
-                   ncomp::Integer, nghost::Integer)
+function iMultiFab(
+        ba::JlBoxArray, dm::JlDistributionMapping,
+        ncomp::Integer, nghost::Integer
+    )
     return JliMultiFab(ba, dm, Int32(ncomp), Int32(nghost))
 end
 
-function iMultiFab(ba::JlBoxArray, dm::JlDistributionMapping,
-                   ncomp::Integer, nghost::NTuple{3, Integer})
-    return JliMultiFab(ba, dm, Int32(ncomp),
-                       Int32(nghost[1]), Int32(nghost[2]), Int32(nghost[3]))
+function iMultiFab(
+        ba::JlBoxArray, dm::JlDistributionMapping,
+        ncomp::Integer, nghost::NTuple{3, Integer}
+    )
+    return JliMultiFab(
+        ba, dm, Int32(ncomp),
+        Int32(nghost[1]), Int32(nghost[2]), Int32(nghost[3])
+    )
 end
 
 """
@@ -48,7 +60,7 @@ in 0-based AMReX coordinates and `n` spans `1:n_comp(mf)`.
     nx, ny, nz = length(rx), length(ry), length(rz)
     nc = Int(n_comp(mf))
     ptr = data_ptr(mfi, mf).cpp_object
-    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, nc); own=false)
+    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, nc); own = false)
     return OffsetArray(raw, rx, ry, rz, 1:nc)
 end
 
@@ -65,7 +77,7 @@ at `mfi`, where `(i, j, k)` spans `fab_box(mfi)` and `n` spans `1:n_comp(imf)`.
     nx, ny, nz = length(rx), length(ry), length(rz)
     nc = Int(n_comp(imf))
     ptr = idata_ptr(mfi, imf).cpp_object
-    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, nc); own=false)
+    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, nc); own = false)
     return OffsetArray(raw, rx, ry, rz, 1:nc)
 end
 
@@ -75,7 +87,7 @@ end
 Iterate over all local FABs/tiles of `mf`, calling `f(mfi, valid_bx, arr)` where `arr`
 is the zero-copy `OffsetArray` from `array4(mf, mfi)`.
 """
-function each_fab(f::F, mf::JlMultiFab; tiling::Bool=false) where {F}
+function each_fab(f::F, mf::JlMultiFab; tiling::Bool = false) where {F}
     mfi = JlMFIter(mf, tiling)
     try
         while is_valid(mfi)
@@ -90,7 +102,7 @@ function each_fab(f::F, mf::JlMultiFab; tiling::Bool=false) where {F}
     return nothing
 end
 
-function each_fab(f::F, imf::JliMultiFab; tiling::Bool=false) where {F}
+function each_fab(f::F, imf::JliMultiFab; tiling::Bool = false) where {F}
     mfi = JlMFIter(imf, tiling)
     try
         while is_valid(mfi)
@@ -119,8 +131,10 @@ Return the number of ghost cells along the first dimension (or `n_grow(mf, dir)`
 Local in-place copy of `ncomp` components from `src` (starting at 0-based `scomp`) to `dst`
 (starting at 0-based `dcomp`) including `nghost` ghost cells.
 """
-@inline function copy!(dst::JlMultiFab, src::JlMultiFab,
-                       scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+@inline function copy!(
+        dst::JlMultiFab, src::JlMultiFab,
+        scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer
+    )
     copy_from!(dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp), Int32(nghost))
     return dst
 end
@@ -131,8 +145,10 @@ end
 Local in-place addition `dst += src` of `ncomp` components from 0-based `scomp` to `dcomp`
 including `nghost` ghost cells.
 """
-@inline function plus!(dst::JlMultiFab, src::JlMultiFab,
-                       scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+@inline function plus!(
+        dst::JlMultiFab, src::JlMultiFab,
+        scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer
+    )
     add_from!(dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp), Int32(nghost))
     return dst
 end
@@ -153,9 +169,11 @@ end
 Compute `dst[dcomp + c] += a * src[scomp + c]` for `c in 1:ncomp` (0-based `scomp`, `dcomp`)
 over the valid box plus `nghost` ghost cells.
 """
-function saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab,
-                scomp::Integer=0, dcomp::Integer=0,
-                ncomp::Integer=Int(n_comp(dst)), nghost::Integer=0)
+function saxpy!(
+        dst::JlMultiFab, a::Real, src::JlMultiFab,
+        scomp::Integer = 0, dcomp::Integer = 0,
+        ncomp::Integer = Int(n_comp(dst)), nghost::Integer = 0
+    )
     af = Float64(a)
     sc = Int(scomp)
     dc = Int(dcomp)
@@ -183,10 +201,12 @@ end
 Compute the linear combination `dst[dcomp + c] = a * x[xcomp + c] + b * y[ycomp + c]`
 for `c in 1:ncomp` (0-based `xcomp`, `ycomp`, `dcomp`) over the valid box plus `nghost` ghost cells.
 """
-function lincomb!(dst::JlMultiFab,
-                  a::Real, x::JlMultiFab, xcomp::Integer,
-                  b::Real, y::JlMultiFab, ycomp::Integer,
-                  dcomp::Integer, ncomp::Integer, nghost::Integer)
+function lincomb!(
+        dst::JlMultiFab,
+        a::Real, x::JlMultiFab, xcomp::Integer,
+        b::Real, y::JlMultiFab, ycomp::Integer,
+        dcomp::Integer, ncomp::Integer, nghost::Integer
+    )
     af = Float64(a)
     bf = Float64(b)
     xc = Int(xcomp)

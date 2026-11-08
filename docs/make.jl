@@ -2,7 +2,7 @@ using Documenter
 using DocumenterVitepress
 using AMReX
 
-DocMeta.setdocmeta!(AMReX, :DocTestSetup, :(using AMReX); recursive=true)
+DocMeta.setdocmeta!(AMReX, :DocTestSetup, :(using AMReX); recursive = true)
 
 makedocs(;
     modules = [AMReX],
@@ -36,4 +36,3 @@ DocumenterVitepress.deploydocs(;
     devbranch = "main",
     push_preview = true,
 )
-

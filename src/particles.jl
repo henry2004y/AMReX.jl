@@ -63,12 +63,14 @@ Set bit 63 of `idcpu` to mark the particle valid.
 Construct a Pure-SoA `JlParticleContainer` where `x, y, z, idcpu` plus `n_real` runtime
 `Float64` components and `n_int` runtime `Int32` components are stored in contiguous 1D SoA arrays.
 """
-function ParticleContainer(amr::JlAmrCore; n_real::Integer=4, n_int::Integer=1)
+function ParticleContainer(amr::JlAmrCore; n_real::Integer = 4, n_int::Integer = 1)
     return JlParticleContainer(amr, Int32(n_real), Int32(n_int))
 end
 
-function ParticleContainer(geom::JlGeometry, dm::JlDistributionMapping, ba::JlBoxArray;
-                           n_real::Integer=4, n_int::Integer=1)
+function ParticleContainer(
+        geom::JlGeometry, dm::JlDistributionMapping, ba::JlBoxArray;
+        n_real::Integer = 4, n_int::Integer = 1
+    )
     return JlParticleContainer(geom, dm, ba, Int32(n_real), Int32(n_int))
 end
 
@@ -80,7 +82,7 @@ Return a zero-copy 1D `Vector{UInt64}` view of the packed `idcpu` array on `pti`
 @inline function idcpu_vec(pti::JlParIter)
     np = Int(num_particles(pti))
     ptr = idcpu_ptr(pti).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own=false)
+    return unsafe_wrap(Array, ptr, (np,); own = false)
 end
 
 """
@@ -91,9 +93,9 @@ positions on `pti`.
 """
 @inline function pos_vecs(pti::JlParIter)
     np = Int(num_particles(pti))
-    px = unsafe_wrap(Array, pos_ptr(pti, Int32(0)).cpp_object, (np,); own=false)
-    py = unsafe_wrap(Array, pos_ptr(pti, Int32(1)).cpp_object, (np,); own=false)
-    pz = unsafe_wrap(Array, pos_ptr(pti, Int32(2)).cpp_object, (np,); own=false)
+    px = unsafe_wrap(Array, pos_ptr(pti, Int32(0)).cpp_object, (np,); own = false)
+    py = unsafe_wrap(Array, pos_ptr(pti, Int32(1)).cpp_object, (np,); own = false)
+    pz = unsafe_wrap(Array, pos_ptr(pti, Int32(2)).cpp_object, (np,); own = false)
     return (px, py, pz)
 end
 
@@ -105,7 +107,7 @@ Return a zero-copy 1D `Vector{Float64}` view of runtime real SoA component `comp
 @inline function real_vec(pti::JlParIter, comp::Integer)
     np = Int(num_particles(pti))
     ptr = real_ptr(pti, Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own=false)
+    return unsafe_wrap(Array, ptr, (np,); own = false)
 end
 
 """
@@ -116,7 +118,7 @@ Return a zero-copy 1D `Vector{Int32}` view of runtime integer SoA component `com
 @inline function int_vec(pti::JlParIter, comp::Integer)
     np = Int(num_particles(pti))
     ptr = int_ptr(pti, Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own=false)
+    return unsafe_wrap(Array, ptr, (np,); own = false)
 end
 
 """
@@ -127,7 +129,7 @@ Return a zero-copy 1D `Vector{UInt64}` view of the packed `idcpu` array on tile 
 @inline function tile_idcpu_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer)
     np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
     ptr = tile_idcpu_ptr(pc, Int32(lev), Int32(grid_id), Int32(tile_id)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own=false)
+    return unsafe_wrap(Array, ptr, (np,); own = false)
 end
 
 """
@@ -138,9 +140,9 @@ Return `(px, py, pz)` zero-copy 1D `Vector{Float64}` views on tile `(lev, grid_i
 @inline function tile_pos_vecs(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer)
     np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
     l, g, t = Int32(lev), Int32(grid_id), Int32(tile_id)
-    px = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(0)).cpp_object, (np,); own=false)
-    py = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(1)).cpp_object, (np,); own=false)
-    pz = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(2)).cpp_object, (np,); own=false)
+    px = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(0)).cpp_object, (np,); own = false)
+    py = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(1)).cpp_object, (np,); own = false)
+    pz = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(2)).cpp_object, (np,); own = false)
     return (px, py, pz)
 end
 
@@ -152,7 +154,7 @@ Return a zero-copy 1D `Vector{Float64}` view of runtime real component `comp` (1
 @inline function tile_real_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer)
     np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
     ptr = tile_real_ptr(pc, Int32(lev), Int32(grid_id), Int32(tile_id), Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own=false)
+    return unsafe_wrap(Array, ptr, (np,); own = false)
 end
 
 """
@@ -163,7 +165,7 @@ Return a zero-copy 1D `Vector{Int32}` view of runtime integer component `comp` (
 @inline function tile_int_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer)
     np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
     ptr = tile_int_ptr(pc, Int32(lev), Int32(grid_id), Int32(tile_id), Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own=false)
+    return unsafe_wrap(Array, ptr, (np,); own = false)
 end
 
 """
@@ -171,7 +173,7 @@ end
 
 Iterate over all active particle tiles at level `lev`, calling `f(pti)`.
 """
-function each_particle_tile(f::F, pc::JlParticleContainer, lev::Integer=0) where {F}
+function each_particle_tile(f::F, pc::JlParticleContainer, lev::Integer = 0) where {F}
     pti = JlParIter(pc, Int32(lev))
     try
         while is_valid(pti)
@@ -190,7 +192,7 @@ end
 Redistribute particles across AMR levels, grids, and MPI ranks according to their updated
 coordinates, and remove any particles marked invalid via `make_invalid_idcpu`.
 """
-@inline redistribute!(pc::JlParticleContainer; lev_min::Integer=0, lev_max::Integer=-1, ngrow::Integer=0) =
+@inline redistribute!(pc::JlParticleContainer; lev_min::Integer = 0, lev_max::Integer = -1, ngrow::Integer = 0) =
     redistribute!(pc, Int32(lev_min), Int32(lev_max), Int32(ngrow))
 
 """
@@ -198,7 +200,7 @@ coordinates, and remove any particles marked invalid via `make_invalid_idcpu`.
 
 Return the total number of particles across all AMR levels in `pc`.
 """
-@inline total_number_of_particles(pc::JlParticleContainer; only_valid::Bool=true, local_only::Bool=false) =
+@inline total_number_of_particles(pc::JlParticleContainer; only_valid::Bool = true, local_only::Bool = false) =
     total_number_of_particles(pc, only_valid, local_only)
 
 """
@@ -206,5 +208,5 @@ Return the total number of particles across all AMR levels in `pc`.
 
 Return the number of particles at AMR level `lev` in `pc`.
 """
-@inline number_of_particles_at_level(pc::JlParticleContainer, lev::Integer; only_valid::Bool=true, local_only::Bool=false) =
+@inline number_of_particles_at_level(pc::JlParticleContainer, lev::Integer; only_valid::Bool = true, local_only::Bool = false) =
     number_of_particles_at_level(pc, Int32(lev), only_valid, local_only)

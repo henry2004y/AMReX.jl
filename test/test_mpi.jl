@@ -27,10 +27,10 @@ try
 
         # 2. Multi-Box DistributionMapping across 2 MPI ranks
         dom = Box(0, 0, 0, 15, 7, 7)
-        rb  = RealBox(0.0, 0.0, 0.0, 16.0, 8.0, 8.0)
-        geom_per = Geometry(dom, rb; is_periodic=(true, true, true))
+        rb = RealBox(0.0, 0.0, 0.0, 16.0, 8.0, 8.0)
+        geom_per = Geometry(dom, rb; is_periodic = (true, true, true))
 
-        ba = BoxArray(dom; max_grid_size=8)
+        ba = BoxArray(dom; max_grid_size = 8)
         @test size(ba) == 2
         dm = DistributionMapping(ba)
         @test size(dm) == 2
@@ -83,7 +83,7 @@ try
         end
 
         # Cross-rank parallel_copy_from! between different BoxArray decompositions
-        ba_alt = BoxArray(dom; max_grid_size=(16, 4, 8))
+        ba_alt = BoxArray(dom; max_grid_size = (16, 4, 8))
         dm_alt = DistributionMapping(ba_alt)
         mf_alt = MultiFab(ba_alt, dm_alt, 1, 0)
         set_val!(mf_alt, -1.0)
@@ -92,10 +92,12 @@ try
         @test max_val(mf_alt, 0, 0) ≈ 20.0
 
         # 4. Cross-Rank ParticleContainer redistribute! (particles migrating between Rank 0 and Rank 1)
-        amr = AmrCore(rb, (16, 8, 8); max_level=0, is_periodic=(true, true, true),
-                      max_grid_size=(8, 8, 8))
+        amr = AmrCore(
+            rb, (16, 8, 8); max_level = 0, is_periodic = (true, true, true),
+            max_grid_size = (8, 8, 8)
+        )
         init_from_scratch!(amr, 0.0)
-        pc = ParticleContainer(amr; n_real=2, n_int=1)
+        pc = ParticleContainer(amr; n_real = 2, n_int = 1)
 
         each_fab(mf) do mfi, vbx, _
             gid = index(mfi)
@@ -120,8 +122,8 @@ try
         end
 
         redistribute!(pc)
-        @test total_number_of_particles(pc; only_valid=true, local_only=false) == 20
-        @test total_number_of_particles(pc; only_valid=true, local_only=true) == 10
+        @test total_number_of_particles(pc; only_valid = true, local_only = false) == 20
+        @test total_number_of_particles(pc; only_valid = true, local_only = true) == 10
 
         each_particle_tile(pc, 0) do pti
             np = num_particles(pti)
@@ -139,9 +141,9 @@ try
 
         # 5. 2-Rank MLMG MLPoisson Solve
         dom_mg = Box(0, 0, 0, 15, 15, 15)
-        rb_mg  = RealBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-        geom_mg = Geometry(dom_mg, rb_mg; is_periodic=(false, false, false))
-        ba_mg = BoxArray(dom_mg; max_grid_size=8)
+        rb_mg = RealBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+        geom_mg = Geometry(dom_mg, rb_mg; is_periodic = (false, false, false))
+        ba_mg = BoxArray(dom_mg; max_grid_size = 8)
         dm_mg = DistributionMapping(ba_mg)
 
         sol = MultiFab(ba_mg, dm_mg, 1, 1)
@@ -170,15 +172,17 @@ try
         end
 
         poisson = MLPoisson(geom_mg, ba_mg, dm_mg)
-        set_domain_bc!(poisson,
-                       (LODirichlet, LODirichlet, LODirichlet),
-                       (LODirichlet, LODirichlet, LODirichlet))
+        set_domain_bc!(
+            poisson,
+            (LODirichlet, LODirichlet, LODirichlet),
+            (LODirichlet, LODirichlet, LODirichlet)
+        )
         set_level_bc!(poisson, 0, nothing)
-        mlmg = MLMG(poisson; verbose=0)
-        res = solve!(mlmg, sol, rhs; reltol=1e-10, abstol=0.0)
-        @test res < 1e-7
+        mlmg = MLMG(poisson; verbose = 0)
+        res = solve!(mlmg, sol, rhs; reltol = 1.0e-10, abstol = 0.0)
+        @test res < 1.0e-7
         saxpy!(exact, -1.0, sol, 0, 0, 1, 0)
-        @test norm0(exact, 0, 0) < 5e-3
+        @test norm0(exact, 0, 0) < 5.0e-3
 
         # 6. 2-Rank Collective Plotfile, VisMF & Particle Checkpoint/Restart I/O
         tok = myproc == 0 ? Int64(rand(100_000:999_999_999)) : Int64(0)
@@ -191,7 +195,7 @@ try
 
         try
             plt_dir = joinpath(tmpdir, "plt_mpi")
-            write_plotfile(plt_dir, sol, geom_mg; varnames=["phi"], time=0.5, step=1)
+            write_plotfile(plt_dir, sol, geom_mg; varnames = ["phi"], time = 0.5, step = 1)
             parallel_barrier()
             @test isfile(joinpath(plt_dir, "Header"))
 
@@ -202,18 +206,18 @@ try
             set_val!(sol_read, 0.0)
             vismf_read!(sol_read, vismf_path)
             saxpy!(sol_read, -1.0, sol, 0, 0, 1, 0)
-            @test norm0(sol_read, 0, 0) < 1e-14
+            @test norm0(sol_read, 0, 0) < 1.0e-14
 
             chk_dir = joinpath(tmpdir, "chk_mpi")
             checkpoint(pc, chk_dir, "particles")
             parallel_barrier()
-            pc2 = ParticleContainer(amr; n_real=2, n_int=1)
+            pc2 = ParticleContainer(amr; n_real = 2, n_int = 1)
             restart!(pc2, chk_dir, "particles")
-            @test total_number_of_particles(pc2; only_valid=true, local_only=false) == 20
+            @test total_number_of_particles(pc2; only_valid = true, local_only = false) == 20
         finally
             parallel_barrier()
             if parallel_ioprocessor()
-                rm(tmpdir; recursive=true, force=true)
+                rm(tmpdir; recursive = true, force = true)
             end
             parallel_barrier()
         end

@@ -24,12 +24,12 @@
             @test is_nodal(nbx, Int32(0))
 
             rb = RealBox(0.0, 0.0, 0.0, 16.0, 16.0, 1.0)
-            geom = Geometry(bx, rb; is_periodic=(true, true, true))
+            geom = Geometry(bx, rb; is_periodic = (true, true, true))
             @test cell_sizes(geom) == (1.0, 1.0, 1.0)
             @test inv_cell_sizes(geom) == (1.0, 1.0, 1.0)
             @test is_periodic(geom, Int32(0))
 
-            ba = BoxArray(bx; max_grid_size=(8, 8, 1))
+            ba = BoxArray(bx; max_grid_size = (8, 8, 1))
             @test AMReX.size(ba) == 4
             nba = nodal_box_array(ba)
             @test is_nodal(get_box(nba, 0), Int32(0))
@@ -39,7 +39,7 @@
     @testset "AmrCore Multi-Level Hierarchy & FillPatchTwoLevels" begin
         let
             rb = RealBox(0.0, 0.0, 0.0, 16.0, 16.0, 1.0)
-            amr = AmrCore(rb, (16, 16, 1); max_level=1, max_grid_size=(8, 8, 1), blocking_factor=(4, 4, 1))
+            amr = AmrCore(rb, (16, 16, 1); max_level = 1, max_grid_size = (8, 8, 1), blocking_factor = (4, 4, 1))
             add_refine_box!(amr, Int32(0), 4.0, 4.0, 0.0, 12.0, 12.0, 1.0)
             init_from_scratch!(amr, 0.0)
 
@@ -56,9 +56,11 @@
             set_val!(mf0, 3.25)
             set_val!(mf1, 0.0)
 
-            interp_from_coarse_to_fine!(mf0, mf1, Int32(0), Int32(1),
-                                        Int32(2), Int32(2), Int32(1),
-                                        g0, g1, Int32(CellConservativeLinear), Int32(1))
+            interp_from_coarse_to_fine!(
+                mf0, mf1, Int32(0), Int32(1),
+                Int32(2), Int32(2), Int32(1),
+                g0, g1, Int32(CellConservativeLinear), Int32(1)
+            )
             @test min_val(mf1, Int32(0), Int32(0)) ≈ 3.25
             @test max_val(mf1, Int32(0), Int32(0)) ≈ 3.25
         end
@@ -69,8 +71,8 @@
             # 1. Non-periodic domain boundary filling (FOExtrap & ExtDir)
             bx = Box(0, 0, 0, 7, 7, 0)
             rb = RealBox(0.0, 0.0, 0.0, 8.0, 8.0, 1.0)
-            geom = Geometry(bx, rb; is_periodic=(false, true, true))
-            ba = BoxArray(bx; max_grid_size=(8, 8, 1))
+            geom = Geometry(bx, rb; is_periodic = (false, true, true))
+            ba = BoxArray(bx; max_grid_size = (8, 8, 1))
             dm = DistributionMapping(ba)
             mf = MultiFab(ba, dm, 1, 1)
             set_val!(mf, 2.5)
@@ -92,7 +94,7 @@
             end
 
             bcr_dir = BCRec(BCExtDir, BCIntDir, BCIntDir, BCExtDir, BCIntDir, BCIntDir)
-            fill_domain_boundary!(mf, geom, bcr_dir; val_lo=(-7.0, 0.0, 0.0), val_hi=(9.0, 0.0, 0.0))
+            fill_domain_boundary!(mf, geom, bcr_dir; val_lo = (-7.0, 0.0, 0.0), val_hi = (9.0, 0.0, 0.0))
             each_fab(mf) do mfi, vbx, arr
                 @test arr[-1, 3, 0, 1] ≈ -7.0
                 @test arr[8, 3, 0, 1] ≈ 9.0
@@ -100,7 +102,7 @@
 
             # 2. Dynamic AMR tagging via tag_cells_by_value! and on_error_est! callback
             rb_amr = RealBox(0.0, 0.0, 0.0, 16.0, 16.0, 1.0)
-            amr = AmrCore(rb_amr, (16, 16, 1); max_level=1, max_grid_size=(8, 8, 1), blocking_factor=(4, 4, 1))
+            amr = AmrCore(rb_amr, (16, 16, 1); max_level = 1, max_grid_size = (8, 8, 1), blocking_factor = (4, 4, 1))
             init_from_scratch!(amr, 0.0)
             @test finest_level(amr) == 0
 

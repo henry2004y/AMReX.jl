@@ -9,18 +9,18 @@
 AMReX linear operator boundary condition enum (`amrex::LinOpBCType` from `AMReX_LO_BCTYPES.H`).
 """
 @enum LinOpBCType::Int32 begin
-    LOInterior         = 0
-    LODirichlet        = 101
-    LONeumann          = 102
-    LOReflectOdd       = 103
-    LOMarshak          = 104
+    LOInterior = 0
+    LODirichlet = 101
+    LONeumann = 102
+    LOReflectOdd = 103
+    LOMarshak = 104
     LOSanchezPomraning = 105
-    LOInflow           = 106
-    LOInhomogNeumann   = 107
-    LORobin            = 108
-    LOSymmetry         = 109
-    LOPeriodic         = 200
-    LOBogus            = 1729
+    LOInflow = 106
+    LOInhomogNeumann = 107
+    LORobin = 108
+    LOSymmetry = 109
+    LOPeriodic = 200
+    LOBogus = 1729
 end
 
 """
@@ -29,14 +29,14 @@ end
 AMReX `MLMG` bottom solver enum (`amrex::BottomSolver`).
 """
 @enum BottomSolver::Int32 begin
-    BottomDefault  = 0
+    BottomDefault = 0
     BottomSmoother = 1
     BottomBiCGStab = 2
-    BottomCG       = 3
-    BottomBiCGCG   = 4
-    BottomCGBiCG   = 5
-    BottomHypre    = 6
-    BottomPETSc    = 7
+    BottomCG = 3
+    BottomBiCGCG = 4
+    BottomCGBiCG = 5
+    BottomHypre = 6
+    BottomPETSc = 7
 end
 
 """
@@ -45,9 +45,9 @@ end
 Location enum (`amrex::MLLinOp::Location`) for `get_grad_solution!` and `get_fluxes!`.
 """
 @enum MLMGLocation::Int32 begin
-    LocFaceCenter   = 0
+    LocFaceCenter = 0
     LocFaceCentroid = 1
-    LocCellCenter   = 2
+    LocCellCenter = 2
     LocCellCentroid = 3
 end
 
@@ -61,13 +61,15 @@ const _MLLinOpUnion = Union{JlMLPoisson, JlMLABecLaplacian, JlMLNodeLaplacian}
 Construct an `LPInfo` configuration struct for AMReX linear operators.
 Set `hidden_direction=2` (0-based z-direction) when solving 2D problems on a 3D `nz=1` grid.
 """
-function LPInfo(; max_coarsening_level::Integer=30,
-                do_agglomeration::Bool=true,
-                do_consolidation::Bool=true,
-                agg_grid_size::Integer=-1,
-                con_grid_size::Integer=-1,
-                has_metric_term::Bool=true,
-                hidden_direction::Integer=-1)
+function LPInfo(;
+        max_coarsening_level::Integer = 30,
+        do_agglomeration::Bool = true,
+        do_consolidation::Bool = true,
+        agg_grid_size::Integer = -1,
+        con_grid_size::Integer = -1,
+        has_metric_term::Bool = true,
+        hidden_direction::Integer = -1
+    )
     return JlLPInfo(
         Int32(max_coarsening_level),
         do_agglomeration,
@@ -89,15 +91,19 @@ end
 
 Construct a cell-centered Poisson linear operator `∇² φ = rhs`.
 """
-function MLPoisson(geom::JlGeometry, ba::JlBoxArray, dm::JlDistributionMapping;
-                   info::JlLPInfo=LPInfo())
+function MLPoisson(
+        geom::JlGeometry, ba::JlBoxArray, dm::JlDistributionMapping;
+        info::JlLPInfo = LPInfo()
+    )
     return JlMLPoisson(geom, ba, dm, info)
 end
 
-function MLPoisson(geoms::AbstractVector{<:JlGeometry},
-                   bas::AbstractVector{<:JlBoxArray},
-                   dms::AbstractVector{<:JlDistributionMapping};
-                   info::JlLPInfo=LPInfo())
+function MLPoisson(
+        geoms::AbstractVector{<:JlGeometry},
+        bas::AbstractVector{<:JlBoxArray},
+        dms::AbstractVector{<:JlDistributionMapping};
+        info::JlLPInfo = LPInfo()
+    )
     length(geoms) == length(bas) == length(dms) ||
         throw(ArgumentError("geoms, bas, and dms must have the same number of levels"))
     op = JlMLPoisson()
@@ -109,12 +115,12 @@ function MLPoisson(geoms::AbstractVector{<:JlGeometry},
     return op
 end
 
-function MLPoisson(amr::JlAmrCore; info::JlLPInfo=LPInfo())
+function MLPoisson(amr::JlAmrCore; info::JlLPInfo = LPInfo())
     nlevs = Int(finest_level(amr)) + 1
     geoms = [geom(amr, Int32(l - 1)) for l in 1:nlevs]
-    bas   = [box_array(amr, Int32(l - 1)) for l in 1:nlevs]
-    dms   = [dmap(amr, Int32(l - 1)) for l in 1:nlevs]
-    return MLPoisson(geoms, bas, dms; info=info)
+    bas = [box_array(amr, Int32(l - 1)) for l in 1:nlevs]
+    dms = [dmap(amr, Int32(l - 1)) for l in 1:nlevs]
+    return MLPoisson(geoms, bas, dms; info = info)
 end
 
 """
@@ -127,15 +133,19 @@ end
 
 Construct a canonical cell-centered Helmholtz / diffusion operator `(A α - B ∇ ⋅ (β ∇)) φ = rhs`.
 """
-function MLABecLaplacian(geom::JlGeometry, ba::JlBoxArray, dm::JlDistributionMapping;
-                         info::JlLPInfo=LPInfo(), ncomp::Integer=1)
+function MLABecLaplacian(
+        geom::JlGeometry, ba::JlBoxArray, dm::JlDistributionMapping;
+        info::JlLPInfo = LPInfo(), ncomp::Integer = 1
+    )
     return JlMLABecLaplacian(geom, ba, dm, info, Int32(ncomp))
 end
 
-function MLABecLaplacian(geoms::AbstractVector{<:JlGeometry},
-                         bas::AbstractVector{<:JlBoxArray},
-                         dms::AbstractVector{<:JlDistributionMapping};
-                         info::JlLPInfo=LPInfo(), ncomp::Integer=1)
+function MLABecLaplacian(
+        geoms::AbstractVector{<:JlGeometry},
+        bas::AbstractVector{<:JlBoxArray},
+        dms::AbstractVector{<:JlDistributionMapping};
+        info::JlLPInfo = LPInfo(), ncomp::Integer = 1
+    )
     length(geoms) == length(bas) == length(dms) ||
         throw(ArgumentError("geoms, bas, and dms must have the same number of levels"))
     op = JlMLABecLaplacian()
@@ -147,12 +157,12 @@ function MLABecLaplacian(geoms::AbstractVector{<:JlGeometry},
     return op
 end
 
-function MLABecLaplacian(amr::JlAmrCore; info::JlLPInfo=LPInfo(), ncomp::Integer=1)
+function MLABecLaplacian(amr::JlAmrCore; info::JlLPInfo = LPInfo(), ncomp::Integer = 1)
     nlevs = Int(finest_level(amr)) + 1
     geoms = [geom(amr, Int32(l - 1)) for l in 1:nlevs]
-    bas   = [box_array(amr, Int32(l - 1)) for l in 1:nlevs]
-    dms   = [dmap(amr, Int32(l - 1)) for l in 1:nlevs]
-    return MLABecLaplacian(geoms, bas, dms; info=info, ncomp=ncomp)
+    bas = [box_array(amr, Int32(l - 1)) for l in 1:nlevs]
+    dms = [dmap(amr, Int32(l - 1)) for l in 1:nlevs]
+    return MLABecLaplacian(geoms, bas, dms; info = info, ncomp = ncomp)
 end
 
 """
@@ -166,15 +176,19 @@ end
 Construct a nodal variable-coefficient Poisson operator `∇ ⋅ (σ ∇ φ) = rhs` where `φ` and `rhs`
 are nodal and `σ` is cell-centered (`ba` must be cell-centered).
 """
-function MLNodeLaplacian(geom::JlGeometry, ba::JlBoxArray, dm::JlDistributionMapping;
-                         info::JlLPInfo=LPInfo(), const_sigma::Real=0.0)
+function MLNodeLaplacian(
+        geom::JlGeometry, ba::JlBoxArray, dm::JlDistributionMapping;
+        info::JlLPInfo = LPInfo(), const_sigma::Real = 0.0
+    )
     return JlMLNodeLaplacian(geom, ba, dm, info, Float64(const_sigma))
 end
 
-function MLNodeLaplacian(geoms::AbstractVector{<:JlGeometry},
-                         bas::AbstractVector{<:JlBoxArray},
-                         dms::AbstractVector{<:JlDistributionMapping};
-                         info::JlLPInfo=LPInfo(), const_sigma::Real=0.0)
+function MLNodeLaplacian(
+        geoms::AbstractVector{<:JlGeometry},
+        bas::AbstractVector{<:JlBoxArray},
+        dms::AbstractVector{<:JlDistributionMapping};
+        info::JlLPInfo = LPInfo(), const_sigma::Real = 0.0
+    )
     length(geoms) == length(bas) == length(dms) ||
         throw(ArgumentError("geoms, bas, and dms must have the same number of levels"))
     op = JlMLNodeLaplacian()
@@ -186,12 +200,12 @@ function MLNodeLaplacian(geoms::AbstractVector{<:JlGeometry},
     return op
 end
 
-function MLNodeLaplacian(amr::JlAmrCore; info::JlLPInfo=LPInfo(), const_sigma::Real=0.0)
+function MLNodeLaplacian(amr::JlAmrCore; info::JlLPInfo = LPInfo(), const_sigma::Real = 0.0)
     nlevs = Int(finest_level(amr)) + 1
     geoms = [geom(amr, Int32(l - 1)) for l in 1:nlevs]
-    bas   = [box_array(amr, Int32(l - 1)) for l in 1:nlevs]
-    dms   = [dmap(amr, Int32(l - 1)) for l in 1:nlevs]
-    return MLNodeLaplacian(geoms, bas, dms; info=info, const_sigma=const_sigma)
+    bas = [box_array(amr, Int32(l - 1)) for l in 1:nlevs]
+    dms = [dmap(amr, Int32(l - 1)) for l in 1:nlevs]
+    return MLNodeLaplacian(geoms, bas, dms; info = info, const_sigma = const_sigma)
 end
 
 """
@@ -200,9 +214,11 @@ end
 
 Set physical domain boundary conditions on `op` (`MLPoisson`, `MLABecLaplacian`, or `MLNodeLaplacian`).
 """
-function set_domain_bc!(op::_MLLinOpUnion,
-                        lo_bc::NTuple{3, Union{Integer, LinOpBCType}},
-                        hi_bc::NTuple{3, Union{Integer, LinOpBCType}})
+function set_domain_bc!(
+        op::_MLLinOpUnion,
+        lo_bc::NTuple{3, Union{Integer, LinOpBCType}},
+        hi_bc::NTuple{3, Union{Integer, LinOpBCType}}
+    )
     set_domain_bc!(
         op,
         Int32(lo_bc[1]), Int32(lo_bc[2]), Int32(lo_bc[3]),
@@ -216,8 +232,10 @@ end
 
 Set boundary condition location offsets from the domain faces.
 """
-function set_domain_bc_loc!(op::Union{JlMLPoisson, JlMLABecLaplacian},
-                            lo_loc::NTuple{3, Real}, hi_loc::NTuple{3, Real})
+function set_domain_bc_loc!(
+        op::Union{JlMLPoisson, JlMLABecLaplacian},
+        lo_loc::NTuple{3, Real}, hi_loc::NTuple{3, Real}
+    )
     set_domain_bc_loc!(
         op,
         Float64(lo_loc[1]), Float64(lo_loc[2]), Float64(lo_loc[3]),
@@ -234,12 +252,14 @@ end
 
 Set level boundary condition data for AMR level `amrlev` (0-based). Pass `nothing` for homogeneous BCs.
 """
-function set_level_bc!(op::Union{JlMLPoisson, JlMLABecLaplacian},
-                       amrlev::Integer,
-                       bcdata::Union{Nothing, JlMultiFab}=nothing;
-                       robin_a::Union{Nothing, JlMultiFab}=nothing,
-                       robin_b::Union{Nothing, JlMultiFab}=nothing,
-                       robin_f::Union{Nothing, JlMultiFab}=nothing)
+function set_level_bc!(
+        op::Union{JlMLPoisson, JlMLABecLaplacian},
+        amrlev::Integer,
+        bcdata::Union{Nothing, JlMultiFab} = nothing;
+        robin_a::Union{Nothing, JlMultiFab} = nothing,
+        robin_b::Union{Nothing, JlMultiFab} = nothing,
+        robin_f::Union{Nothing, JlMultiFab} = nothing
+    )
     lev = Int32(amrlev)
     if bcdata === nothing
         set_level_bc_homog!(op, lev)
@@ -259,10 +279,12 @@ end
 Set coarse/fine boundary conditions for a fine-only solve where level 0 of the operator is embedded
 inside a coarser AMR level `crse`.
 """
-function set_coarse_fine_bc!(op::Union{JlMLPoisson, JlMLABecLaplacian},
-                             crse::Union{Nothing, JlMultiFab},
-                             ref_ratio::Union{Integer, NTuple{3, Integer}};
-                             bc_type::Union{Integer, LinOpBCType}=LODirichlet)
+function set_coarse_fine_bc!(
+        op::Union{JlMLPoisson, JlMLABecLaplacian},
+        crse::Union{Nothing, JlMultiFab},
+        ref_ratio::Union{Integer, NTuple{3, Integer}};
+        bc_type::Union{Integer, LinOpBCType} = LODirichlet
+    )
     rr = ref_ratio isa Integer ? (ref_ratio, ref_ratio, ref_ratio) : ref_ratio
     if crse === nothing
         set_coarse_fine_bc_homog!(op, Int32(rr[1]), Int32(rr[2]), Int32(rr[3]), Int32(bc_type))
@@ -315,12 +337,14 @@ update_velocity!(op::JlMLNodeLaplacian, vel::JlMultiFab, sol::JlMultiFab) =
 Construct an AMReX Multi-Level Multi-Grid (`MLMG`) solver for `op` (`MLPoisson`,
 `MLABecLaplacian`, or `MLNodeLaplacian`).
 """
-function MLMG(op::_MLLinOpUnion;
-              verbose::Integer=0,
-              bottom_verbose::Integer=0,
-              max_iter::Integer=100,
-              max_fmg_iter::Integer=0,
-              bottom_solver::BottomSolver=BottomDefault)
+function MLMG(
+        op::_MLLinOpUnion;
+        verbose::Integer = 0,
+        bottom_verbose::Integer = 0,
+        max_iter::Integer = 100,
+        max_fmg_iter::Integer = 0,
+        bottom_solver::BottomSolver = BottomDefault
+    )
     solver = JlMLMG(op)
     set_verbose!(solver, Int32(verbose))
     set_bottom_verbose!(solver, Int32(bottom_verbose))
@@ -339,17 +363,21 @@ end
 Solve the linear system `L(sol) = rhs` to relative tolerance `reltol` and absolute tolerance `abstol`,
 returning the final infinity-norm residual.
 """
-function solve!(mlmg::JlMLMG, sol::JlMultiFab, rhs::JlMultiFab;
-                reltol::Real=1e-11, abstol::Real=0.0)
+function solve!(
+        mlmg::JlMLMG, sol::JlMultiFab, rhs::JlMultiFab;
+        reltol::Real = 1.0e-11, abstol::Real = 0.0
+    )
     stage_clear!(mlmg)
     stage_push_sol_rhs!(mlmg, sol, rhs)
     return Float64(solve_staged!(mlmg, Float64(reltol), Float64(abstol)))
 end
 
-function solve!(mlmg::JlMLMG,
-                sols::AbstractVector{<:JlMultiFab},
-                rhss::AbstractVector{<:JlMultiFab};
-                reltol::Real=1e-11, abstol::Real=0.0)
+function solve!(
+        mlmg::JlMLMG,
+        sols::AbstractVector{<:JlMultiFab},
+        rhss::AbstractVector{<:JlMultiFab};
+        reltol::Real = 1.0e-11, abstol::Real = 0.0
+    )
     length(sols) == length(rhss) ||
         throw(ArgumentError("sols and rhss must have the same number of levels"))
     stage_clear!(mlmg)
@@ -367,17 +395,21 @@ end
 
 Compute the face-centered gradient `(∂φ/∂x, ∂φ/∂y, ∂φ/∂z)` after `solve!`.
 """
-function get_grad_solution!(mlmg::JlMLMG, grad::NTuple{3, JlMultiFab};
-                            loc::MLMGLocation=LocFaceCenter)
+function get_grad_solution!(
+        mlmg::JlMLMG, grad::NTuple{3, JlMultiFab};
+        loc::MLMGLocation = LocFaceCenter
+    )
     stage_clear!(mlmg)
     stage_push_face_vec!(mlmg, grad[1], grad[2], grad[3])
     get_grad_solution_staged!(mlmg, Int32(loc))
     return nothing
 end
 
-function get_grad_solution!(mlmg::JlMLMG,
-                            grads::AbstractVector{<:NTuple{3, JlMultiFab}};
-                            loc::MLMGLocation=LocFaceCenter)
+function get_grad_solution!(
+        mlmg::JlMLMG,
+        grads::AbstractVector{<:NTuple{3, JlMultiFab}};
+        loc::MLMGLocation = LocFaceCenter
+    )
     stage_clear!(mlmg)
     for g in grads
         stage_push_face_vec!(mlmg, g[1], g[2], g[3])
@@ -394,17 +426,21 @@ end
 
 Compute the diffusive fluxes (`-β ∇φ`) on faces or cell centers after `solve!`.
 """
-function get_fluxes!(mlmg::JlMLMG, flux::NTuple{3, JlMultiFab};
-                     loc::MLMGLocation=LocFaceCenter)
+function get_fluxes!(
+        mlmg::JlMLMG, flux::NTuple{3, JlMultiFab};
+        loc::MLMGLocation = LocFaceCenter
+    )
     stage_clear!(mlmg)
     stage_push_face_vec!(mlmg, flux[1], flux[2], flux[3])
     get_fluxes_face_staged!(mlmg, Int32(loc))
     return nothing
 end
 
-function get_fluxes!(mlmg::JlMLMG,
-                     fluxes::AbstractVector{<:NTuple{3, JlMultiFab}};
-                     loc::MLMGLocation=LocFaceCenter)
+function get_fluxes!(
+        mlmg::JlMLMG,
+        fluxes::AbstractVector{<:NTuple{3, JlMultiFab}};
+        loc::MLMGLocation = LocFaceCenter
+    )
     stage_clear!(mlmg)
     for f in fluxes
         stage_push_face_vec!(mlmg, f[1], f[2], f[3])
@@ -413,17 +449,21 @@ function get_fluxes!(mlmg::JlMLMG,
     return nothing
 end
 
-function get_fluxes!(mlmg::JlMLMG, flux::JlMultiFab;
-                     loc::MLMGLocation=LocCellCenter)
+function get_fluxes!(
+        mlmg::JlMLMG, flux::JlMultiFab;
+        loc::MLMGLocation = LocCellCenter
+    )
     stage_clear!(mlmg)
     stage_push_out!(mlmg, flux)
     get_fluxes_cc_staged!(mlmg, Int32(loc))
     return nothing
 end
 
-function get_fluxes!(mlmg::JlMLMG,
-                     fluxes::AbstractVector{<:JlMultiFab};
-                     loc::MLMGLocation=LocCellCenter)
+function get_fluxes!(
+        mlmg::JlMLMG,
+        fluxes::AbstractVector{<:JlMultiFab};
+        loc::MLMGLocation = LocCellCenter
+    )
     stage_clear!(mlmg)
     for f in fluxes
         stage_push_out!(mlmg, f)
@@ -446,10 +486,12 @@ function comp_residual!(mlmg::JlMLMG, res::JlMultiFab, sol::JlMultiFab, rhs::JlM
     return nothing
 end
 
-function comp_residual!(mlmg::JlMLMG,
-                        ress::AbstractVector{<:JlMultiFab},
-                        sols::AbstractVector{<:JlMultiFab},
-                        rhss::AbstractVector{<:JlMultiFab})
+function comp_residual!(
+        mlmg::JlMLMG,
+        ress::AbstractVector{<:JlMultiFab},
+        sols::AbstractVector{<:JlMultiFab},
+        rhss::AbstractVector{<:JlMultiFab}
+    )
     length(ress) == length(sols) == length(rhss) ||
         throw(ArgumentError("ress, sols, and rhss must have the same number of levels"))
     stage_clear!(mlmg)
@@ -473,9 +515,11 @@ function apply!(mlmg::JlMLMG, out::JlMultiFab, in_mf::JlMultiFab)
     return nothing
 end
 
-function apply!(mlmg::JlMLMG,
-                outs::AbstractVector{<:JlMultiFab},
-                ins::AbstractVector{<:JlMultiFab})
+function apply!(
+        mlmg::JlMLMG,
+        outs::AbstractVector{<:JlMultiFab},
+        ins::AbstractVector{<:JlMultiFab}
+    )
     length(outs) == length(ins) ||
         throw(ArgumentError("outs and ins must have the same number of levels"))
     stage_clear!(mlmg)
@@ -485,4 +529,3 @@ function apply!(mlmg::JlMLMG,
     apply_staged!(mlmg)
     return nothing
 end
-
