@@ -105,15 +105,3 @@ julia --project=AMReX.jl -e 'using Pkg; Pkg.test(; test_args=["mlmg", "mpi"])'
 julia --project=AMReX.jl -e 'using AMReX_jll; run(`$(AMReX_jll.MPICH_jll.mpiexec()) -n 2 $(Base.julia_cmd()) --project=AMReX.jl AMReX.jl/test/test_mpi.jl`)'
 ```
 
-## Package Structure
-
-| File | Description |
-| :--- | :--- |
-| `src/box_geometry.jl` | `Box`, `RealBox`, `Geometry`, `BoxArray`, `DistributionMapping`, parallel reductions |
-| `src/multifab.jl` | `MultiFab`, `iMultiFab`, `MFIter`, zero-copy 4D `OffsetArray` views (`array4`, `iarray4`, `each_fab`), linear algebra (`copy!`, `plus!`, `scale!`, `saxpy!`, `lincomb!`) |
-| `src/amrcore.jl` | `AmrCore`, `MathBCType`, `BCRec`, `fill_domain_boundary!`, `TagBoxArray`, dynamic error tagging (`on_error_est!`), `FillPatch*`, coarse-fine interpolation & restriction |
-| `src/flux_register.jl` | `YAFluxRegister`, `EdgeFluxRegister`, `reflux!`, staggered `average_down_faces!` / `average_down_edges!` |
-| `src/mlmg.jl` | `LPInfo`, `MLPoisson`, `MLABecLaplacian`, `MLNodeLaplacian`, `MLMG` multi-level multigrid solvers |
-| `src/particles.jl` | Pure-SoA `ParticleContainer`, `ParIter`, 64-bit `idcpu` bit manipulation, zero-copy tile vectors, `redistribute!` |
-| `src/io.jl` | $N$-level `write_plotfile`, `write_plotfile_hdf5`, `VisMF` (`vismf_write`, `vismf_read!`), particle `checkpoint` / `restart!` / `checkpoint_hdf5` / `restart_hdf5!` |
-| `deps/cshim/amrex_jl_shim.cpp` | `CxxWrap.jl` C++ shim binding AMReX classes and functions |
