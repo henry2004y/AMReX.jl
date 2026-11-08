@@ -25,24 +25,29 @@ if should_run_suite("hygiene", TEST_FILTERS)
     include("test_hygiene.jl")
 end
 
-if !amrex_initialized()
-    amrex_init(false)
-end
+const AMREX_SUITES = [
+    ("geometry_box", "test_geometry_box.jl"),
+    ("multifab",     "test_multifab.jl"),
+    ("particles_io", "test_particles_io.jl"),
+]
 
-try
-    @testset "AMReX.jl Modular Test Suite" begin
-        for (suite_name, file) in [
-            ("geometry_box", "test_geometry_box.jl"),
-            ("multifab",     "test_multifab.jl"),
-            ("particles_io", "test_particles_io.jl"),
-        ]
-            if should_run_suite(suite_name, TEST_FILTERS)
+const ACTIVE_AMREX_SUITES = filter(s -> should_run_suite(s[1], TEST_FILTERS), AMREX_SUITES)
+
+if !isempty(ACTIVE_AMREX_SUITES)
+    if !amrex_initialized()
+        amrex_init(false)
+    end
+
+    try
+        @testset "AMReX.jl Modular Test Suite" begin
+            for (_, file) in ACTIVE_AMREX_SUITES
                 include(file)
             end
         end
-    end
-finally
-    if amrex_initialized()
-        amrex_finalize()
+    finally
+        GC.gc()
+        if amrex_initialized()
+            amrex_finalize()
+        end
     end
 end

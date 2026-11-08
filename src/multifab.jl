@@ -105,26 +105,54 @@ function each_fab(f::F, imf::JliMultiFab; tiling::Bool=false) where {F}
     return nothing
 end
 
+"""
+    n_grow(mf::Union{JlMultiFab, JliMultiFab}) -> Int
+
+Return the number of ghost cells along the first dimension (or `n_grow(mf, dir)` for 0-based `dir`).
+"""
 @inline n_grow(mf::JlMultiFab) = Int(n_grow(mf, Int32(0)))
 @inline n_grow(imf::JliMultiFab) = Int(n_grow(imf, Int32(0)))
 
+"""
+    copy!(dst::JlMultiFab, src::JlMultiFab, scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+
+Local in-place copy of `ncomp` components from `src` (starting at 0-based `scomp`) to `dst`
+(starting at 0-based `dcomp`) including `nghost` ghost cells.
+"""
 @inline function copy!(dst::JlMultiFab, src::JlMultiFab,
                        scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
     copy_from!(dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp), Int32(nghost))
     return dst
 end
 
+"""
+    plus!(dst::JlMultiFab, src::JlMultiFab, scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+
+Local in-place addition `dst += src` of `ncomp` components from 0-based `scomp` to `dcomp`
+including `nghost` ghost cells.
+"""
 @inline function plus!(dst::JlMultiFab, src::JlMultiFab,
                        scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
     add_from!(dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp), Int32(nghost))
     return dst
 end
 
+"""
+    scale!(mf::JlMultiFab, val::Real)
+
+Multiply all components and ghost cells of `mf` in-place by scalar `val`.
+"""
 @inline function scale!(mf::JlMultiFab, val::Real)
     mult_val!(mf, Float64(val), Int32(0), n_comp(mf), n_grow(mf, Int32(0)))
     return mf
 end
 
+"""
+    saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab, scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+
+Compute `dst[dcomp + c] += a * src[scomp + c]` for `c in 1:ncomp` (0-based `scomp`, `dcomp`)
+over the valid box plus `nghost` ghost cells.
+"""
 function saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab,
                 scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
     af = Float64(a)
@@ -146,6 +174,12 @@ function saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab,
     return dst
 end
 
+"""
+    lincomb!(dst::JlMultiFab, a::Real, x::JlMultiFab, xcomp::Integer, b::Real, y::JlMultiFab, ycomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+
+Compute the linear combination `dst[dcomp + c] = a * x[xcomp + c] + b * y[ycomp + c]`
+for `c in 1:ncomp` (0-based `xcomp`, `ycomp`, `dcomp`) over the valid box plus `nghost` ghost cells.
+"""
 function lincomb!(dst::JlMultiFab,
                   a::Real, x::JlMultiFab, xcomp::Integer,
                   b::Real, y::JlMultiFab, ycomp::Integer,

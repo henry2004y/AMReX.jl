@@ -6,4 +6,11 @@ deps/lib/
 plt*
 chk*
 Backtrace.*
+docs/build/
+docs/node_modules/
+docs/package.json
+docs/package-lock.json
+docs/Manifest.toml
+docs/src/.vitepress/
+
 

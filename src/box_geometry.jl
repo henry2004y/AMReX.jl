@@ -49,24 +49,44 @@ function Geometry(dom::JlBox, rb::JlRealBox;
                       is_periodic[1], is_periodic[2], is_periodic[3])
 end
 
+"""
+    cell_sizes(geom::JlGeometry) -> NTuple{3, Float64}
+
+Return the physical cell widths `(dx, dy, dz)` for `geom`.
+"""
 @inline cell_sizes(geom::JlGeometry) = (
     Float64(cell_size(geom, 0)),
     Float64(cell_size(geom, 1)),
     Float64(cell_size(geom, 2)),
 )
 
+"""
+    inv_cell_sizes(geom::JlGeometry) -> NTuple{3, Float64}
+
+Return the inverse physical cell widths `(1/dx, 1/dy, 1/dz)` for `geom`.
+"""
 @inline inv_cell_sizes(geom::JlGeometry) = (
     Float64(inv_cell_size(geom, 0)),
     Float64(inv_cell_size(geom, 1)),
     Float64(inv_cell_size(geom, 2)),
 )
 
+"""
+    prob_lo_tuple(geom::JlGeometry) -> NTuple{3, Float64}
+
+Return the lower physical coordinates `(xlo, ylo, zlo)` of the problem domain.
+"""
 @inline prob_lo_tuple(geom::JlGeometry) = (
     Float64(prob_lo(geom, 0)),
     Float64(prob_lo(geom, 1)),
     Float64(prob_lo(geom, 2)),
 )
 
+"""
+    prob_hi_tuple(geom::JlGeometry) -> NTuple{3, Float64}
+
+Return the upper physical coordinates `(xhi, yhi, zhi)` of the problem domain.
+"""
 @inline prob_hi_tuple(geom::JlGeometry) = (
     Float64(prob_hi(geom, 0)),
     Float64(prob_hi(geom, 1)),

@@ -1,3 +1,14 @@
+"""
+    AMReX
+
+High-performance Julia bindings for the [AMReX](https://amrex-codes.github.io/amrex/)
+block-structured Adaptive Mesh Refinement (AMR) framework, powered by `CxxWrap.jl` and
+`AMReX_jll`.
+
+Provides zero-copy 4D `OffsetArray` views over `MultiFab`/`iMultiFab` `FArrayBox`es,
+pure Structure-of-Arrays (SoA) `ParticleContainer` tile views, multi-level `AmrCore`
+mesh hierarchies, and `Preferences.jl`-configurable CPU/GPU backends.
+"""
 module AMReX
 
 using AMReX_jll
@@ -55,7 +66,26 @@ include("amrcore.jl")
 include("particles.jl")
 include("io.jl")
 
+"""
+    amrex_init(verbose::Bool=false)
+
+Initialize the AMReX runtime and MPI communicator if not already initialized.
+"""
 amrex_init() = amrex_init(false)
+
+"""
+    amrex_initialized() -> Bool
+
+Return `true` if the AMReX runtime is currently initialized.
+"""
+function amrex_initialized end
+
+"""
+    amrex_finalize()
+
+Finalize the AMReX runtime and release global AMReX arenas and resources.
+"""
+function amrex_finalize end
 
 export amrex_init, amrex_initialized, amrex_finalize
 export parallel_myproc, parallel_nprocs, parallel_ioprocessor, parallel_barrier
