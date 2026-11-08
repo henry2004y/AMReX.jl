@@ -1,5 +1,11 @@
 # AMReX.jl
 
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://henry2004y.github.io/AMReX.jl/stable)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://henry2004y.github.io/AMReX.jl/dev)
+[![Build Status](https://github.com/henry2004y/AMReX.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/henry2004y/AMReX.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![Coverage](https://codecov.io/gh/henry2004y/AMReX.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/henry2004y/AMReX.jl)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 High-performance Julia bindings for the [AMReX](https://amrex-codes.github.io/amrex/) C++ framework for block-structured Adaptive Mesh Refinement (AMR), powered by [`CxxWrap.jl`](https://github.com/JuliaInterop/CxxWrap.jl) and [`AMReX_jll.jl`](https://github.com/JuliaBinaryWrappers/AMReX_jll.jl).
 
 ## Key Features
