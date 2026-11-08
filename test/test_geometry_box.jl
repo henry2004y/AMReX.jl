@@ -63,4 +63,82 @@
             @test max_val(mf1, Int32(0), Int32(0)) ≈ 3.25
         end
     end
+
+    @testset "Physical BCs (BCRec, fill_domain_boundary!) & Dynamic Tagging" begin
+        let
+            # 1. Non-periodic domain boundary filling (FOExtrap & ExtDir)
+            bx = Box(0, 0, 0, 7, 7, 0)
+            rb = RealBox(0.0, 0.0, 0.0, 8.0, 8.0, 1.0)
+            geom = Geometry(bx, rb; is_periodic=(false, true, true))
+            ba = BoxArray(bx; max_grid_size=(8, 8, 1))
+            dm = DistributionMapping(ba)
+            mf = MultiFab(ba, dm, 1, 1)
+            set_val!(mf, 2.5)
+            # Zero out ghost cells first
+            each_fab(mf) do mfi, vbx, arr
+                rx, ry, rz = bounds(vbx)
+                for k in rz, j in ry
+                    arr[first(rx) - 1, j, k, 1] = 0.0
+                    arr[last(rx) + 1, j, k, 1] = 0.0
+                end
+            end
+
+            bcr_extrap = BCRec(BCFOExtrap, BCIntDir, BCIntDir, BCFOExtrap, BCIntDir, BCIntDir)
+            @test lo(bcr_extrap, Int32(0)) == Int32(BCFOExtrap)
+            fill_domain_boundary!(mf, geom, bcr_extrap)
+            each_fab(mf) do mfi, vbx, arr
+                @test arr[-1, 3, 0, 1] ≈ 2.5
+                @test arr[8, 3, 0, 1] ≈ 2.5
+            end
+
+            bcr_dir = BCRec(BCExtDir, BCIntDir, BCIntDir, BCExtDir, BCIntDir, BCIntDir)
+            fill_domain_boundary!(mf, geom, bcr_dir; val_lo=(-7.0, 0.0, 0.0), val_hi=(9.0, 0.0, 0.0))
+            each_fab(mf) do mfi, vbx, arr
+                @test arr[-1, 3, 0, 1] ≈ -7.0
+                @test arr[8, 3, 0, 1] ≈ 9.0
+            end
+
+            # 2. Dynamic AMR tagging via tag_cells_by_value! and on_error_est! callback
+            rb_amr = RealBox(0.0, 0.0, 0.0, 16.0, 16.0, 1.0)
+            amr = AmrCore(rb_amr, (16, 16, 1); max_level=1, max_grid_size=(8, 8, 1), blocking_factor=(4, 4, 1))
+            init_from_scratch!(amr, 0.0)
+            @test finest_level(amr) == 0
+
+            mf_tag = MultiFab(box_array(amr, Int32(0)), dmap(amr, Int32(0)), 1, 1)
+            set_val!(mf_tag, 0.0)
+            each_fab(mf_tag) do mfi, vbx, arr
+                rx, ry, rz = bounds(vbx)
+                for k in rz, j in ry, i in rx
+                    if 4 <= i <= 11 && 4 <= j <= 11
+                        arr[i, j, k, 1] = 10.0
+                    end
+                end
+            end
+
+            tag_cells_by_value!(amr, 0, mf_tag, 5.0)
+            regrid_levels!(amr, Int32(0), 0.0)
+            @test finest_level(amr) == 1
+
+            # Clear mask and test on_error_est! callback with TagBoxArray
+            clear_tag_masks!(amr)
+            regrid_levels!(amr, Int32(0), 0.0)
+            @test finest_level(amr) == 0
+
+            on_error_est!(amr) do lev, tags, t
+                if lev == 0
+                    each_fab(tags) do mfi, vbx, tarr
+                        rx, ry, rz = bounds(vbx)
+                        for k in rz, j in ry, i in rx
+                            if i < 4 && j < 4
+                                tarr[i, j, k, 1] = Int8(TagSet)
+                            end
+                        end
+                    end
+                end
+            end
+            regrid_levels!(amr, Int32(0), 0.0)
+            @test finest_level(amr) == 1
+            on_error_est!(nothing, amr)
+        end
+    end
 end

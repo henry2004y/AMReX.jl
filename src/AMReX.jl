@@ -107,10 +107,14 @@ export copy!, plus!, scale!, saxpy!, lincomb!
 export fill_boundary!, fill_boundary_comp!, sum_boundary!, sum_boundary_comp!
 export min_val, max_val, norm0, norm1, norm2, sum_val
 export is_valid, next!, close!, index, grid_index, local_tile_index, valid_box, tile_box, fab_box
-export fab_lo, fab_hi, ifab_lo, ifab_hi, array4, iarray4, each_fab
+export fab_lo, fab_hi, ifab_lo, ifab_hi, tfab_lo, tfab_hi, array4, iarray4, tag_array4, each_fab
 
 export JlAmrCore, JlAmrCoreAllocated, AmrCore, InterpType, CellConservativeLinear, NodeBilinear, PiecewiseConstant, CellQuadratic
-export add_refine_box!, add_tag_box!, clear_refine_boxes!, init_from_scratch!, regrid_levels!
+export MathBCType, BCBogus, BCReflectOdd, BCIntDir, BCReflectEven, BCFOExtrap, BCExtDir, BCHOExtrap, BCHOExtrapCC, BCExtDirCC
+export JlBCRec, JlBCRecAllocated, BCRec, set_lo!, set_hi!, fill_domain_boundary!
+export JlTagBoxArray, JlTagBoxArrayAllocated, TagBoxArray, TagVal, TagClear, TagBuf, TagSet
+export add_refine_box!, add_tag_box!, clear_refine_boxes!, set_tag_mask!, set_tag_boxes!, clear_tag_masks!
+export on_error_est!, tag_cells_by_value!, tag_cells_by_grad!, init_from_scratch!, regrid_levels!
 export finest_level, max_level, geom, geometry, dmap, dist_map, node_box_array, ref_ratio, ref_ratio_tuple
 export mpi_rank, parallel_reduce_sum
 export set_box_array!, set_dmap!, set_finest_level!
