@@ -104,4 +104,3 @@ julia --project=AMReX.jl -e 'using Pkg; Pkg.test(; test_args=["mlmg", "mpi"])'
 # Run the 2-rank MPI test script directly
 julia --project=AMReX.jl -e 'using AMReX_jll; run(`$(AMReX_jll.MPICH_jll.mpiexec()) -n 2 $(Base.julia_cmd()) --project=AMReX.jl AMReX.jl/test/test_mpi.jl`)'
 ```
-
