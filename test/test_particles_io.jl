@@ -66,6 +66,97 @@
             @test isfile(joinpath(plt_dir, "Header"))
             write_plotfile(pc, plt_dir, "particles")
             @test isdir(joinpath(plt_dir, "particles"))
+
+            # Native ParticleContainer checkpoint + restart! roundtrip
+            chk_dir = joinpath(tmpdir, "chk00000")
+            checkpoint(pc, chk_dir, "particles")
+            @test isfile(joinpath(chk_dir, "particles", "Header"))
+
+            pc_restored = ParticleContainer(amr; n_real=4, n_int=1)
+            @test total_number_of_particles(pc_restored) == 0
+            restart!(pc_restored, chk_dir, "particles")
+            @test total_number_of_particles(pc_restored) == 60
+            each_particle_tile(pc_restored, 0) do pti
+                np = num_particles(pti)
+                if np > 0
+                    w_vec = real_vec(pti, 1)
+                    ux_vec = real_vec(pti, 2)
+                    sup_vec = int_vec(pti, 1)
+                    idcpus = idcpu_vec(pti)
+                    @test all(isapprox.(w_vec, 1.25; atol=1e-12))
+                    @test all(isapprox.(ux_vec, 2.0; atol=1e-12))
+                    @test all(==(Int32(7)), sup_vec)
+                    @test all(is_valid_idcpu, idcpus)
+                end
+            end
+
+            # HDF5 ParticleContainer plotfile & checkpoint/restart roundtrip
+            plt_h5_dir = joinpath(tmpdir, "plt_h5_00000")
+            write_plotfile_hdf5(plt_h5_dir, mf_dummy, g0; varnames=["rho"], time=0.0, step=0)
+            @test isfile(joinpath(plt_h5_dir) * ".h5") || isdir(plt_h5_dir)
+            write_plotfile_hdf5(pc, plt_h5_dir, "particles")
+            @test isfile(joinpath(plt_h5_dir, "particles", "particles.h5"))
+
+            chk_h5_dir = joinpath(tmpdir, "chk_h5_00000")
+            checkpoint_hdf5(pc, chk_h5_dir, "particles")
+            @test isfile(joinpath(chk_h5_dir, "particles", "particles.h5"))
+
+            pc_h5_restored = ParticleContainer(amr; n_real=4, n_int=1)
+            restart_hdf5!(pc_h5_restored, chk_h5_dir, "particles")
+            @test total_number_of_particles(pc_h5_restored) == 60
+            each_particle_tile(pc_h5_restored, 0) do pti
+                np = num_particles(pti)
+                if np > 0
+                    w_vec = real_vec(pti, 1)
+                    ux_vec = real_vec(pti, 2)
+                    sup_vec = int_vec(pti, 1)
+                    idcpus = idcpu_vec(pti)
+                    @test all(isapprox.(w_vec, 1.25; atol=1e-12))
+                    @test all(isapprox.(ux_vec, 2.0; atol=1e-12))
+                    @test all(==(Int32(7)), sup_vec)
+                    @test all(is_valid_idcpu, idcpus)
+                end
+            end
+
+            # VisMF MultiFab checkpoint write/read roundtrip
+            mf_src = MultiFab(box_array(amr, Int32(0)), dmap(amr, Int32(0)), 2, 0)
+            set_val_comp!(mf_src, 3.14, 0, 1, 0)
+            set_val_comp!(mf_src, -2.71, 1, 1, 0)
+            vismf_path = joinpath(tmpdir, "vismf_chk", "Level_0", "Cell")
+            nbytes = vismf_write(mf_src, vismf_path)
+            @test nbytes > 0
+            @test vismf_exist(vismf_path)
+
+            mf_dst = MultiFab(box_array(amr, Int32(0)), dmap(amr, Int32(0)), 2, 0)
+            set_val!(mf_dst, 0.0)
+            vismf_read!(mf_dst, vismf_path)
+            @test min_val(mf_dst, 0, 0) ≈ 3.14
+            @test max_val(mf_dst, 0, 0) ≈ 3.14
+            @test min_val(mf_dst, 1, 0) ≈ -2.71
+            @test max_val(mf_dst, 1, 0) ≈ -2.71
+
+            # 3-level N-level plotfile (native and HDF5)
+            amr3 = AmrCore(rb, (8, 8, 8); max_level=2, max_grid_size=(8, 8, 8), blocking_factor=(2, 2, 2))
+            add_refine_box!(amr3, Int32(0), 2.0, 2.0, 0.2, 6.0, 6.0, 0.8)
+            add_refine_box!(amr3, Int32(1), 3.0, 3.0, 0.3, 5.0, 5.0, 0.7)
+            init_from_scratch!(amr3, 0.0)
+            @test finest_level(amr3) == 2
+
+            mfs3 = [MultiFab(box_array(amr3, Int32(l)), dmap(amr3, Int32(l)), 2, 0) for l in 0:2]
+            geoms3 = [geom(amr3, Int32(l)) for l in 0:2]
+            for l in 1:3
+                set_val!(mfs3[l], Float64(l))
+            end
+            plt3_dir = joinpath(tmpdir, "plt_3lev")
+            write_plotfile(plt3_dir, mfs3, geoms3; varnames=["u", "v"], time=1.5, step=[1, 2, 4], ref_ratio=(2, 2, 2))
+            @test isfile(joinpath(plt3_dir, "Header"))
+            @test isdir(joinpath(plt3_dir, "Level_0"))
+            @test isdir(joinpath(plt3_dir, "Level_1"))
+            @test isdir(joinpath(plt3_dir, "Level_2"))
+
+            plt3_h5 = joinpath(tmpdir, "plt_3lev_h5")
+            write_plotfile_hdf5(plt3_h5, mfs3, geoms3; varnames=["u", "v"], time=1.5, step=1, ref_ratio=(2, 2, 2))
+            @test isfile(plt3_h5 * ".h5") || isdir(plt3_h5)
         end
     end
 end

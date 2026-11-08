@@ -21,8 +21,13 @@
 #include <AMReX_ParticleTile.H>
 #include <AMReX_PhysBCFunct.H>
 #include <AMReX_PlotFileUtil.H>
+#ifdef AMREX_USE_HDF5
+#include <AMReX_PlotFileUtilHDF5.H>
+#endif
 #include <AMReX_RealBox.H>
 #include <AMReX_TagBox.H>
+#include <AMReX_Utility.H>
+#include <AMReX_VisMF.H>
 #include <AMReX_YAFluxRegister.H>
 #include <AMReX_EdgeFluxRegister.H>
 #include <AMReX_MLMG.H>
@@ -844,11 +849,71 @@ struct JlParticleContainer {
     }
 
     void write_plotfile(const std::string& dir, const std::string& name) const {
+        if (amrex::ParallelDescriptor::IOProcessor() && !dir.empty()) {
+            amrex::UtilCreateDirectory(dir, 0755);
+        }
+        amrex::ParallelDescriptor::Barrier();
         pc->WritePlotFile(dir, name);
     }
 
     void checkpoint(const std::string& dir, const std::string& name) const {
+        if (amrex::ParallelDescriptor::IOProcessor() && !dir.empty()) {
+            amrex::UtilCreateDirectory(dir, 0755);
+        }
+        amrex::ParallelDescriptor::Barrier();
         pc->Checkpoint(dir, name);
+    }
+
+    void restart(const std::string& dir, const std::string& file) {
+        pc->Restart(dir, file);
+    }
+
+    void write_plotfile_hdf5(const std::string& dir, const std::string& name,
+                             const std::string& compression) const {
+#ifdef AMREX_USE_HDF5
+        if (amrex::ParallelDescriptor::IOProcessor() && !dir.empty()) {
+            amrex::UtilCreateDirectory(dir, 0755);
+        }
+        amrex::ParallelDescriptor::Barrier();
+        pc->WritePlotFileHDF5(dir, name, compression);
+#else
+        amrex::ignore_unused(dir, name, compression);
+        amrex::Abort("AMReX was not built with HDF5 support (AMREX_USE_HDF5)");
+#endif
+    }
+
+    void checkpoint_hdf5(const std::string& dir, const std::string& name,
+                         const std::string& compression) const {
+#ifdef AMREX_USE_HDF5
+        if (amrex::ParallelDescriptor::IOProcessor() && !dir.empty()) {
+            amrex::UtilCreateDirectory(dir, 0755);
+        }
+        amrex::ParallelDescriptor::Barrier();
+        pc->CheckpointHDF5(dir, name, true, amrex::Vector<std::string>{},
+                           amrex::Vector<std::string>{}, compression);
+#else
+        amrex::ignore_unused(dir, name, compression);
+        amrex::Abort("AMReX was not built with HDF5 support (AMREX_USE_HDF5)");
+#endif
+    }
+
+    void restart_hdf5(const std::string& dir, const std::string& file) {
+#ifdef AMREX_USE_HDF5
+        std::string base = dir;
+        if (!base.empty() && base.back() != '/') {
+            base += '/';
+        }
+        std::string direct_h5 = base + file + ".h5";
+        std::string subdir_h5 = base + file + "/" + file + ".h5";
+        if (!amrex::FileExists(direct_h5) && amrex::FileExists(subdir_h5)) {
+            pc->RestartHDF5(base + file, file);
+        } else {
+            pc->RestartHDF5(dir, file);
+        }
+#else
+        amrex::ignore_unused(dir, file);
+        amrex::Abort("AMReX was not built with HDF5 support (AMREX_USE_HDF5)");
+#endif
     }
 };
 
@@ -1376,6 +1441,22 @@ struct JlMLMG {
         stage_clear();
     }
 };
+
+struct PlotfileStage {
+    std::vector<const amrex::MultiFab*> mfs;
+    std::vector<amrex::Geometry> geoms;
+    std::vector<int> steps;
+    std::vector<amrex::IntVect> ref_ratios;
+
+    void clear() {
+        mfs.clear();
+        geoms.clear();
+        steps.clear();
+        ref_ratios.clear();
+    }
+};
+
+PlotfileStage g_plotfile_stage;
 
 // ============================================================================
 // JLCXX Module Registration
@@ -1944,7 +2025,11 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("number_of_particles_at_level", &JlParticleContainer::number_of_particles_at_level)
         .method("clear_particles!", &JlParticleContainer::clear_particles)
         .method("write_plotfile", &JlParticleContainer::write_plotfile)
-        .method("checkpoint", &JlParticleContainer::checkpoint);
+        .method("checkpoint", &JlParticleContainer::checkpoint)
+        .method("restart!", &JlParticleContainer::restart)
+        .method("write_plotfile_hdf5", &JlParticleContainer::write_plotfile_hdf5)
+        .method("checkpoint_hdf5", &JlParticleContainer::checkpoint_hdf5)
+        .method("restart_hdf5!", &JlParticleContainer::restart_hdf5);
 
     mod.add_type<JlParIter>("JlParIter")
         .constructor<JlParticleContainer&, int>()
@@ -1966,7 +2051,7 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         return static_cast<int64_t>(amrex::Particle<0, 0>::NextID());
     });
 
-    // Plotfile I/O
+    // Plotfile & VisMF I/O
     mod.method("write_single_level_plotfile", [](const std::string& plotfilename,
                                                  const JlMultiFab& mf,
                                                  const std::string& varnames_csv,
@@ -1994,5 +2079,106 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         amrex::Vector<amrex::IntVect> rr{amrex::IntVect(rx, ry, rz)};
         amrex::WriteMultiLevelPlotfile(plotfilename, 2, mfs, amrex_vnames,
                                        geoms, time, steps, rr);
+    });
+
+    mod.method("plotfile_stage_clear!", []() {
+        g_plotfile_stage.clear();
+    });
+
+    mod.method("plotfile_stage_push_level!", [](const JlMultiFab& mf,
+                                                const JlGeometry& geom,
+                                                int step,
+                                                int rx, int ry, int rz) {
+        g_plotfile_stage.mfs.push_back(mf.mf.get());
+        g_plotfile_stage.geoms.push_back(geom.geom);
+        g_plotfile_stage.steps.push_back(step);
+        if (rx > 0 && ry > 0 && rz > 0) {
+            g_plotfile_stage.ref_ratios.emplace_back(rx, ry, rz);
+        }
+    });
+
+    mod.method("write_staged_multilevel_plotfile", [](const std::string& plotfilename,
+                                                      const std::string& varnames_csv,
+                                                      double time) {
+        int nlevels = static_cast<int>(g_plotfile_stage.mfs.size());
+        if (nlevels <= 0) return;
+        int ncomp = g_plotfile_stage.mfs[0]->nComp();
+        auto vnames = split_varnames(varnames_csv, ncomp);
+        amrex::Vector<std::string> amrex_vnames(vnames.begin(), vnames.end());
+        amrex::Vector<const amrex::MultiFab*> mfs(g_plotfile_stage.mfs.begin(),
+                                                  g_plotfile_stage.mfs.end());
+        amrex::Vector<amrex::Geometry> geoms(g_plotfile_stage.geoms.begin(),
+                                             g_plotfile_stage.geoms.end());
+        amrex::Vector<int> steps(g_plotfile_stage.steps.begin(),
+                                 g_plotfile_stage.steps.end());
+        amrex::Vector<amrex::IntVect> rr(g_plotfile_stage.ref_ratios.begin(),
+                                         g_plotfile_stage.ref_ratios.end());
+        g_plotfile_stage.clear();
+        amrex::WriteMultiLevelPlotfile(plotfilename, nlevels, mfs, amrex_vnames,
+                                       geoms, time, steps, rr);
+    });
+
+    mod.method("write_single_level_plotfile_hdf5", [](const std::string& plotfilename,
+                                                      const JlMultiFab& mf,
+                                                      const std::string& varnames_csv,
+                                                      const JlGeometry& geom,
+                                                      double time, int level_step,
+                                                      const std::string& compression) {
+#ifdef AMREX_USE_HDF5
+        auto vnames = split_varnames(varnames_csv, mf.n_comp());
+        amrex::Vector<std::string> amrex_vnames(vnames.begin(), vnames.end());
+        amrex::WriteSingleLevelPlotfileHDF5(plotfilename, *mf.mf, amrex_vnames,
+                                            geom.geom, time, level_step, compression);
+#else
+        amrex::ignore_unused(plotfilename, mf, varnames_csv, geom, time, level_step, compression);
+        amrex::Abort("AMReX was not built with HDF5 support (AMREX_USE_HDF5)");
+#endif
+    });
+
+    mod.method("write_staged_multilevel_plotfile_hdf5", [](const std::string& plotfilename,
+                                                           const std::string& varnames_csv,
+                                                           double time,
+                                                           const std::string& compression) {
+#ifdef AMREX_USE_HDF5
+        int nlevels = static_cast<int>(g_plotfile_stage.mfs.size());
+        if (nlevels <= 0) return;
+        int ncomp = g_plotfile_stage.mfs[0]->nComp();
+        auto vnames = split_varnames(varnames_csv, ncomp);
+        amrex::Vector<std::string> amrex_vnames(vnames.begin(), vnames.end());
+        amrex::Vector<const amrex::MultiFab*> mfs(g_plotfile_stage.mfs.begin(),
+                                                  g_plotfile_stage.mfs.end());
+        amrex::Vector<amrex::Geometry> geoms(g_plotfile_stage.geoms.begin(),
+                                             g_plotfile_stage.geoms.end());
+        amrex::Vector<int> steps(g_plotfile_stage.steps.begin(),
+                                 g_plotfile_stage.steps.end());
+        amrex::Vector<amrex::IntVect> rr(g_plotfile_stage.ref_ratios.begin(),
+                                         g_plotfile_stage.ref_ratios.end());
+        g_plotfile_stage.clear();
+        amrex::WriteMultiLevelPlotfileHDF5(plotfilename, nlevels, mfs, amrex_vnames,
+                                           geoms, time, steps, rr, compression);
+#else
+        g_plotfile_stage.clear();
+        amrex::ignore_unused(plotfilename, varnames_csv, time, compression);
+        amrex::Abort("AMReX was not built with HDF5 support (AMREX_USE_HDF5)");
+#endif
+    });
+
+    mod.method("vismf_write", [](const JlMultiFab& mf, const std::string& name) {
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            std::string d = amrex::VisMF::DirName(name);
+            if (!d.empty()) {
+                amrex::UtilCreateDirectory(d, 0755);
+            }
+        }
+        amrex::ParallelDescriptor::Barrier();
+        return static_cast<int64_t>(amrex::VisMF::Write(*mf.mf, name));
+    });
+
+    mod.method("vismf_read!", [](JlMultiFab& mf, const std::string& name) {
+        amrex::VisMF::Read(*mf.mf, name);
+    });
+
+    mod.method("vismf_exist", [](const std::string& name) {
+        return amrex::VisMF::Exist(name);
     });
 }

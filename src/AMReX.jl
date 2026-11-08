@@ -151,7 +151,8 @@ export next_particle_id, reserve_and_resize_data!, ensure_tile!, resize_tile!, t
 export idcpu_vec, pos_vecs, real_vec, int_vec
 export tile_idcpu_vec, tile_pos_vecs, tile_real_vec, tile_int_vec
 export each_particle_tile, redistribute!, total_number_of_particles, number_of_particles_at_level, clear_particles!
-export write_plotfile, checkpoint, set_amrex_prefix!
+export write_plotfile, write_plotfile_hdf5, checkpoint, checkpoint_hdf5, restart!, restart_hdf5!
+export vismf_write, vismf_read!, vismf_exist, set_amrex_prefix!
 
 @setup_workload begin
     @compile_workload begin
