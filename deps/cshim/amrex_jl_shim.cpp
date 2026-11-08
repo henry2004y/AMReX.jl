@@ -303,6 +303,12 @@ struct JlMFIter {
     JlMFIter(const JliMultiFab& imf, bool do_tiling)
         : mfi(std::make_unique<amrex::MFIter>(*imf.imf, do_tiling)) {}
 
+    ~JlMFIter() {
+        if (!amrex::Initialized()) {
+            mfi.release();
+        }
+    }
+
     bool is_valid() const { return mfi && mfi->isValid(); }
     void next() { ++(*mfi); }
     void close() { mfi.reset(); }
@@ -440,7 +446,7 @@ protected:
 };
 
 struct JlAmrCore {
-    std::unique_ptr<AmrCoreImpl> core;
+    std::shared_ptr<AmrCoreImpl> core;
 
     JlAmrCore(const JlRealBox& rb, int max_level_in,
               int nx, int ny, int nz, int coord,
@@ -448,13 +454,13 @@ struct JlAmrCore {
               int max_grid_x, int max_grid_y, int max_grid_z,
               int block_x, int block_y, int block_z,
               double grid_eff)
-        : core(std::make_unique<AmrCoreImpl>(
+        : core(std::make_shared<AmrCoreImpl>(
               rb, max_level_in, nx, ny, nz, coord, px, py, pz,
               max_grid_x, max_grid_y, max_grid_z, block_x, block_y, block_z, grid_eff)) {}
 
     ~JlAmrCore() {
         if (!amrex::Initialized()) {
-            core.release();
+            new (&core) std::shared_ptr<AmrCoreImpl>();
         }
     }
 
@@ -506,12 +512,14 @@ using PureSoAParticleContainer =
 using PureSoAParIter = amrex::ParIterSoA<AMREX_SPACEDIM, 0>;
 
 struct JlParticleContainer {
+    std::shared_ptr<AmrCoreImpl> amr_ref;
     std::unique_ptr<PureSoAParticleContainer> pc;
     int num_runtime_real = 0;
     int num_runtime_int = 0;
 
     JlParticleContainer(JlAmrCore& amr_core, int n_rt_real, int n_rt_int)
-        : pc(std::make_unique<PureSoAParticleContainer>(amr_core.core.get())),
+        : amr_ref(amr_core.core),
+          pc(std::make_unique<PureSoAParticleContainer>(amr_core.core.get())),
           num_runtime_real(n_rt_real),
           num_runtime_int(n_rt_int) {
         pc->SetSoACompileTimeNames({"x", "y", "z"}, {});
@@ -527,7 +535,8 @@ struct JlParticleContainer {
 
     JlParticleContainer(const JlGeometry& geom, const JlDistributionMapping& dm,
                         const JlBoxArray& ba, int n_rt_real, int n_rt_int)
-        : pc(std::make_unique<PureSoAParticleContainer>(
+        : amr_ref(nullptr),
+          pc(std::make_unique<PureSoAParticleContainer>(
               amrex::Vector<amrex::Geometry>{geom.geom},
               amrex::Vector<amrex::DistributionMapping>{dm.dm},
               amrex::Vector<amrex::BoxArray>{ba.ba},
@@ -548,6 +557,10 @@ struct JlParticleContainer {
     ~JlParticleContainer() {
         if (!amrex::Initialized()) {
             pc.release();
+            new (&amr_ref) std::shared_ptr<AmrCoreImpl>();
+        } else {
+            pc.reset();
+            amr_ref.reset();
         }
     }
 
@@ -622,6 +635,12 @@ struct JlParIter {
 
     JlParIter(JlParticleContainer& pc, int lev)
         : pti(std::make_unique<PureSoAParIter>(*pc.pc, lev)) {}
+
+    ~JlParIter() {
+        if (!amrex::Initialized()) {
+            pti.release();
+        }
+    }
 
     bool is_valid() const { return pti && pti->isValid(); }
     void next() { ++(*pti); }
