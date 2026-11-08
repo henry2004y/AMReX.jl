@@ -148,18 +148,21 @@ Multiply all components and ghost cells of `mf` in-place by scalar `val`.
 end
 
 """
-    saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab, scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+    saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab, scomp::Integer=0, dcomp::Integer=0, ncomp::Integer=Int(n_comp(dst)), nghost::Integer=0)
 
 Compute `dst[dcomp + c] += a * src[scomp + c]` for `c in 1:ncomp` (0-based `scomp`, `dcomp`)
 over the valid box plus `nghost` ghost cells.
 """
 function saxpy!(dst::JlMultiFab, a::Real, src::JlMultiFab,
-                scomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
+                scomp::Integer=0, dcomp::Integer=0,
+                ncomp::Integer=Int(n_comp(dst)), nghost::Integer=0)
     af = Float64(a)
     sc = Int(scomp)
     dc = Int(dcomp)
     nc = Int(ncomp)
     ng = Int(nghost)
+    (0 <= sc && sc + nc <= Int(n_comp(src))) || throw(BoundsError("saxpy! scomp=$sc, ncomp=$nc out of bounds for src with $(n_comp(src)) components (0-based)"))
+    (0 <= dc && dc + nc <= Int(n_comp(dst))) || throw(BoundsError("saxpy! dcomp=$dc, ncomp=$nc out of bounds for dst with $(n_comp(dst)) components (0-based)"))
     each_fab(dst) do mfi, vbx, d_arr
         s_arr = array4(src, mfi)
         rx0, ry0, rz0 = bounds(vbx)
@@ -191,6 +194,9 @@ function lincomb!(dst::JlMultiFab,
     dc = Int(dcomp)
     nc = Int(ncomp)
     ng = Int(nghost)
+    (0 <= xc && xc + nc <= Int(n_comp(x))) || throw(BoundsError("lincomb! xcomp=$xc, ncomp=$nc out of bounds for x with $(n_comp(x)) components (0-based)"))
+    (0 <= yc && yc + nc <= Int(n_comp(y))) || throw(BoundsError("lincomb! ycomp=$yc, ncomp=$nc out of bounds for y with $(n_comp(y)) components (0-based)"))
+    (0 <= dc && dc + nc <= Int(n_comp(dst))) || throw(BoundsError("lincomb! dcomp=$dc, ncomp=$nc out of bounds for dst with $(n_comp(dst)) components (0-based)"))
     each_fab(dst) do mfi, vbx, d_arr
         x_arr = array4(x, mfi)
         y_arr = array4(y, mfi)

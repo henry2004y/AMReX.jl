@@ -19,10 +19,10 @@ features:
     details: Access cell-centered and nodal MultiFab / iMultiFab FArrayBoxes directly with 0-based AMReX index ranges (rx, ry, rz, 1:ncomp) and zero heap allocations in inner loops.
   - title: Pure-SoA Particle Containers
     details: High-throughput Structure-of-Arrays (SoA) particle storage with 64-bit packed idcpu words, direct tile vector views, and multi-level MPI redistribution.
-  - title: Block-Structured Multi-Level AMR
-    details: Manage hierarchical meshes via AmrCore with conservative linear, bilinear nodal, quadratic, and piecewise-constant coarse-fine interpolation and restriction.
-  - title: Configurable CPU & GPU Backends
-    details: Ready out of the box with AMReX_jll (MPI + CPU) and seamlessly switchable to custom local or GPU-enabled libamrex installations via Preferences.jl.
+  - title: Block-Structured Multi-Level AMR & Linear Solvers
+    details: Manage hierarchical meshes via AmrCore with dynamic TagBoxArray error tagging, physical boundary conditions (BCRec / PhysBCFunct), YAFluxRegister / EdgeFluxRegister refluxing, and MLMG multi-level multigrid solvers (MLPoisson, MLABecLaplacian, MLNodeLaplacian).
+  - title: MPI Parallelism, HDF5 & Checkpoint/Restart I/O
+    details: Ready out of the box with AMReX_jll (MPICH + HDF5) for N-level plotfiles, HDF5 plotfile/particle I/O, VisMF field checkpoints, and particle checkpoint/restart.
 ---
 ```
 

@@ -1,3 +1,5 @@
+ENV["OMP_NUM_THREADS"] = get(ENV, "OMP_NUM_THREADS", "1")
+
 using Test
 using AMReX
 
@@ -50,5 +52,13 @@ if !isempty(ACTIVE_AMREX_SUITES)
         if amrex_initialized()
             amrex_finalize()
         end
+    end
+end
+
+if should_run_suite("mpi", TEST_FILTERS)
+    @testset "2-Process MPI Subprocess Suite" begin
+        mpi_test_script = joinpath(@__DIR__, "test_mpi.jl")
+        cmd = `$(AMReX.AMReX_jll.MPICH_jll.mpiexec()) -n 2 $(Base.julia_cmd()) --project=$(Base.active_project()) $mpi_test_script`
+        @test success(pipeline(cmd; stdout=stdout, stderr=stderr))
     end
 end
