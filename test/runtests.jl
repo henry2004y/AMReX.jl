@@ -28,6 +28,7 @@ end
 const AMREX_SUITES = [
     ("geometry_box", "test_geometry_box.jl"),
     ("multifab",     "test_multifab.jl"),
+    ("mlmg",         "test_mlmg.jl"),
     ("particles_io", "test_particles_io.jl"),
 ]
 

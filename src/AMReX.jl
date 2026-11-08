@@ -64,6 +64,7 @@ include("box_geometry.jl")
 include("multifab.jl")
 include("amrcore.jl")
 include("flux_register.jl")
+include("mlmg.jl")
 include("particles.jl")
 include("io.jl")
 
@@ -124,6 +125,25 @@ export average_down!, average_down_nodal!, average_down_faces!, average_down_fac
 export JlYAFluxRegister, JlYAFluxRegisterAllocated, YAFluxRegister
 export JlEdgeFluxRegister, JlEdgeFluxRegisterAllocated, EdgeFluxRegister
 export reset!, crse_add!, fine_add!, reflux!, crse_has_work, fine_has_work
+
+export LinOpBCType, LOInterior, LODirichlet, LONeumann, LOReflectOdd, LOMarshak, LOSanchezPomraning
+export LOInflow, LOInhomogNeumann, LORobin, LOSymmetry, LOPeriodic, LOBogus
+export BottomSolver, BottomDefault, BottomSmoother, BottomBiCGStab, BottomCG, BottomBiCGCG, BottomCGBiCG, BottomHypre, BottomPETSc
+export MLMGLocation, LocFaceCenter, LocFaceCentroid, LocCellCenter, LocCellCentroid
+export JlLPInfo, JlLPInfoAllocated, LPInfo
+export set_max_coarsening_level!, set_agglomeration!, set_consolidation!, set_agg_grid_size!, set_con_grid_size!, set_metric_term!, set_hidden_direction!
+export JlMLPoisson, JlMLPoissonAllocated, MLPoisson
+export JlMLABecLaplacian, JlMLABecLaplacianAllocated, MLABecLaplacian
+export JlMLNodeLaplacian, JlMLNodeLaplacianAllocated, MLNodeLaplacian
+export JlMLMG, JlMLMGAllocated, MLMG
+export set_domain_bc!, set_domain_bc_loc!, set_level_bc!, set_level_bc_homog!, set_level_bc_robin!, set_coarse_fine_bc!, set_coarse_fine_bc_homog!
+export set_max_order!, get_max_order, set_verbose!, set_enforce_singular_solvable!
+export set_scalars!, set_a_coeffs!, set_a_coeffs_scalar!, set_b_coeffs!, set_b_coeffs_scalar!
+export set_sigma!, set_gauss_seidel!, set_harmonic_average!, comp_divergence!, update_velocity!
+export set_bottom_verbose!, set_max_iter!, set_max_fmg_iter!, set_fixed_iter!, set_pre_smooth!, set_post_smooth!, set_final_smooth!, set_bottom_smooth!
+export set_bottom_solver!, set_bottom_max_iter!, set_bottom_tolerance!, set_bottom_tolerance_abs!, set_final_fill_bc!
+export num_amr_levels, get_init_residual, get_final_residual, get_init_rhs
+export solve!, get_grad_solution!, get_fluxes!, comp_residual!, apply!
 
 export JlParticleContainer, JlParticleContainerAllocated, ParticleContainer, JlParIter, JlParIterAllocated
 export pack_idcpu, unpack_id, unpack_cpu, is_valid_idcpu, make_invalid_idcpu, make_valid_idcpu

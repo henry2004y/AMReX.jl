@@ -25,6 +25,10 @@
 #include <AMReX_TagBox.H>
 #include <AMReX_YAFluxRegister.H>
 #include <AMReX_EdgeFluxRegister.H>
+#include <AMReX_MLMG.H>
+#include <AMReX_MLPoisson.H>
+#include <AMReX_MLABecLaplacian.H>
+#include <AMReX_MLNodeLaplacian.H>
 #include <AMReX_iMultiFab.H>
 
 #include <algorithm>
@@ -1005,6 +1009,375 @@ struct JlEdgeFluxRegister {
 };
 
 // ============================================================================
+// Linear Solvers (LPInfo, MLPoisson, MLABecLaplacian, MLNodeLaplacian, MLMG)
+// ============================================================================
+
+struct JlLPInfo {
+    amrex::LPInfo info;
+
+    JlLPInfo() = default;
+    JlLPInfo(int max_coarsening_level, bool do_agg, bool do_con,
+             int agg_grid_size, int con_grid_size,
+             bool has_metric_term, int hidden_direction) {
+        info.setMaxCoarseningLevel(max_coarsening_level)
+            .setAgglomeration(do_agg)
+            .setConsolidation(do_con)
+            .setAgglomerationGridSize(agg_grid_size)
+            .setConsolidationGridSize(con_grid_size)
+            .setMetricTerm(has_metric_term)
+            .setHiddenDirection(hidden_direction);
+    }
+
+    void set_max_coarsening_level(int n) { info.setMaxCoarseningLevel(n); }
+    void set_agglomeration(bool x) { info.setAgglomeration(x); }
+    void set_consolidation(bool x) { info.setConsolidation(x); }
+    void set_agg_grid_size(int x) { info.setAgglomerationGridSize(x); }
+    void set_con_grid_size(int x) { info.setConsolidationGridSize(x); }
+    void set_metric_term(bool x) { info.setMetricTerm(x); }
+    void set_hidden_direction(int n) { info.setHiddenDirection(n); }
+};
+
+struct JlMLPoisson {
+    std::unique_ptr<amrex::MLPoisson> op;
+    amrex::Vector<amrex::Geometry> staged_geom;
+    amrex::Vector<amrex::BoxArray> staged_ba;
+    amrex::Vector<amrex::DistributionMapping> staged_dm;
+
+    JlMLPoisson() : op(std::make_unique<amrex::MLPoisson>()) {}
+    JlMLPoisson(const JlGeometry& geom, const JlBoxArray& ba,
+                const JlDistributionMapping& dm, const JlLPInfo& info)
+        : op(std::make_unique<amrex::MLPoisson>(
+              amrex::Vector<amrex::Geometry>{geom.geom},
+              amrex::Vector<amrex::BoxArray>{ba.ba},
+              amrex::Vector<amrex::DistributionMapping>{dm.dm},
+              info.info)) {}
+
+    ~JlMLPoisson() {
+        if (!amrex::Initialized()) {
+            op.release();
+            new (&staged_geom) amrex::Vector<amrex::Geometry>();
+            new (&staged_ba) amrex::Vector<amrex::BoxArray>();
+            new (&staged_dm) amrex::Vector<amrex::DistributionMapping>();
+        }
+    }
+
+    void stage_clear() {
+        staged_geom.clear();
+        staged_ba.clear();
+        staged_dm.clear();
+    }
+    void stage_push_level(const JlGeometry& g, const JlBoxArray& ba,
+                          const JlDistributionMapping& dm) {
+        staged_geom.push_back(g.geom);
+        staged_ba.push_back(ba.ba);
+        staged_dm.push_back(dm.dm);
+    }
+    void define_staged(const JlLPInfo& info) {
+        op = std::make_unique<amrex::MLPoisson>(staged_geom, staged_ba, staged_dm, info.info);
+        stage_clear();
+    }
+
+    void set_domain_bc(int lox, int loy, int loz, int hix, int hiy, int hiz) {
+        op->setDomainBC(
+            {static_cast<amrex::LinOpBCType>(lox),
+             static_cast<amrex::LinOpBCType>(loy),
+             static_cast<amrex::LinOpBCType>(loz)},
+            {static_cast<amrex::LinOpBCType>(hix),
+             static_cast<amrex::LinOpBCType>(hiy),
+             static_cast<amrex::LinOpBCType>(hiz)});
+    }
+    void set_domain_bc_loc(double lox, double loy, double loz,
+                           double hix, double hiy, double hiz) {
+        op->setDomainBCLoc({lox, loy, loz}, {hix, hiy, hiz});
+    }
+    void set_level_bc_homog(int amrlev) { op->setLevelBC(amrlev, nullptr); }
+    void set_level_bc(int amrlev, const JlMultiFab& bcdata) {
+        op->setLevelBC(amrlev, bcdata.mf.get());
+    }
+    void set_level_bc_robin(int amrlev, const JlMultiFab& bcdata,
+                            const JlMultiFab& ra, const JlMultiFab& rb, const JlMultiFab& rf) {
+        op->setLevelBC(amrlev, bcdata.mf.get(), ra.mf.get(), rb.mf.get(), rf.mf.get());
+    }
+    void set_coarse_fine_bc(const JlMultiFab& crse, int rx, int ry, int rz, int bc_type) {
+        op->setCoarseFineBC(crse.mf.get(), amrex::IntVect(rx, ry, rz),
+                            static_cast<amrex::LinOpBCType>(bc_type));
+    }
+    void set_coarse_fine_bc_homog(int rx, int ry, int rz, int bc_type) {
+        op->setCoarseFineBC(static_cast<const amrex::MultiFab*>(nullptr),
+                            amrex::IntVect(rx, ry, rz),
+                            static_cast<amrex::LinOpBCType>(bc_type));
+    }
+    void set_max_order(int o) { op->setMaxOrder(o); }
+    int get_max_order() const { return op->getMaxOrder(); }
+    void set_verbose(int v) { op->setVerbose(v); }
+    void set_enforce_singular_solvable(bool o) { op->setEnforceSingularSolvable(o); }
+};
+
+struct JlMLABecLaplacian {
+    std::unique_ptr<amrex::MLABecLaplacian> op;
+    amrex::Vector<amrex::Geometry> staged_geom;
+    amrex::Vector<amrex::BoxArray> staged_ba;
+    amrex::Vector<amrex::DistributionMapping> staged_dm;
+
+    JlMLABecLaplacian() : op(std::make_unique<amrex::MLABecLaplacian>()) {}
+    JlMLABecLaplacian(const JlGeometry& geom, const JlBoxArray& ba,
+                      const JlDistributionMapping& dm, const JlLPInfo& info, int ncomp)
+        : op(std::make_unique<amrex::MLABecLaplacian>(
+              amrex::Vector<amrex::Geometry>{geom.geom},
+              amrex::Vector<amrex::BoxArray>{ba.ba},
+              amrex::Vector<amrex::DistributionMapping>{dm.dm},
+              info.info, amrex::Vector<amrex::FabFactory<amrex::FArrayBox> const*>{}, ncomp)) {}
+
+    ~JlMLABecLaplacian() {
+        if (!amrex::Initialized()) {
+            op.release();
+            new (&staged_geom) amrex::Vector<amrex::Geometry>();
+            new (&staged_ba) amrex::Vector<amrex::BoxArray>();
+            new (&staged_dm) amrex::Vector<amrex::DistributionMapping>();
+        }
+    }
+
+    void stage_clear() {
+        staged_geom.clear();
+        staged_ba.clear();
+        staged_dm.clear();
+    }
+    void stage_push_level(const JlGeometry& g, const JlBoxArray& ba,
+                          const JlDistributionMapping& dm) {
+        staged_geom.push_back(g.geom);
+        staged_ba.push_back(ba.ba);
+        staged_dm.push_back(dm.dm);
+    }
+    void define_staged(const JlLPInfo& info, int ncomp) {
+        op = std::make_unique<amrex::MLABecLaplacian>(
+            staged_geom, staged_ba, staged_dm, info.info,
+            amrex::Vector<amrex::FabFactory<amrex::FArrayBox> const*>{}, ncomp);
+        stage_clear();
+    }
+
+    void set_domain_bc(int lox, int loy, int loz, int hix, int hiy, int hiz) {
+        op->setDomainBC(
+            {static_cast<amrex::LinOpBCType>(lox),
+             static_cast<amrex::LinOpBCType>(loy),
+             static_cast<amrex::LinOpBCType>(loz)},
+            {static_cast<amrex::LinOpBCType>(hix),
+             static_cast<amrex::LinOpBCType>(hiy),
+             static_cast<amrex::LinOpBCType>(hiz)});
+    }
+    void set_domain_bc_loc(double lox, double loy, double loz,
+                           double hix, double hiy, double hiz) {
+        op->setDomainBCLoc({lox, loy, loz}, {hix, hiy, hiz});
+    }
+    void set_level_bc_homog(int amrlev) { op->setLevelBC(amrlev, nullptr); }
+    void set_level_bc(int amrlev, const JlMultiFab& bcdata) {
+        op->setLevelBC(amrlev, bcdata.mf.get());
+    }
+    void set_level_bc_robin(int amrlev, const JlMultiFab& bcdata,
+                            const JlMultiFab& ra, const JlMultiFab& rb, const JlMultiFab& rf) {
+        op->setLevelBC(amrlev, bcdata.mf.get(), ra.mf.get(), rb.mf.get(), rf.mf.get());
+    }
+    void set_coarse_fine_bc(const JlMultiFab& crse, int rx, int ry, int rz, int bc_type) {
+        op->setCoarseFineBC(crse.mf.get(), amrex::IntVect(rx, ry, rz),
+                            static_cast<amrex::LinOpBCType>(bc_type));
+    }
+    void set_coarse_fine_bc_homog(int rx, int ry, int rz, int bc_type) {
+        op->setCoarseFineBC(static_cast<const amrex::MultiFab*>(nullptr),
+                            amrex::IntVect(rx, ry, rz),
+                            static_cast<amrex::LinOpBCType>(bc_type));
+    }
+    void set_max_order(int o) { op->setMaxOrder(o); }
+    int get_max_order() const { return op->getMaxOrder(); }
+    void set_verbose(int v) { op->setVerbose(v); }
+    void set_enforce_singular_solvable(bool o) { op->setEnforceSingularSolvable(o); }
+
+    void set_scalars(double a, double b) { op->setScalars(a, b); }
+    void set_a_coeffs_scalar(int amrlev, double alpha) { op->setACoeffs(amrlev, alpha); }
+    void set_a_coeffs(int amrlev, const JlMultiFab& alpha) {
+        op->setACoeffs(amrlev, *alpha.mf);
+    }
+    void set_b_coeffs_scalar(int amrlev, double beta) { op->setBCoeffs(amrlev, beta); }
+    void set_b_coeffs(int amrlev, const JlMultiFab& bx, const JlMultiFab& by, const JlMultiFab& bz) {
+        amrex::Array<amrex::MultiFab const*, AMREX_SPACEDIM> b{
+            bx.mf.get(), by.mf.get(), bz.mf.get()
+        };
+        op->setBCoeffs(amrlev, b);
+    }
+};
+
+struct JlMLNodeLaplacian {
+    std::unique_ptr<amrex::MLNodeLaplacian> op;
+    amrex::Vector<amrex::Geometry> staged_geom;
+    amrex::Vector<amrex::BoxArray> staged_ba;
+    amrex::Vector<amrex::DistributionMapping> staged_dm;
+
+    JlMLNodeLaplacian() : op(std::make_unique<amrex::MLNodeLaplacian>()) {}
+    JlMLNodeLaplacian(const JlGeometry& geom, const JlBoxArray& ba,
+                      const JlDistributionMapping& dm, const JlLPInfo& info, double const_sigma)
+        : op(std::make_unique<amrex::MLNodeLaplacian>(
+              amrex::Vector<amrex::Geometry>{geom.geom},
+              amrex::Vector<amrex::BoxArray>{ba.ba},
+              amrex::Vector<amrex::DistributionMapping>{dm.dm},
+              info.info, amrex::Vector<amrex::FabFactory<amrex::FArrayBox> const*>{},
+              const_sigma)) {}
+
+    ~JlMLNodeLaplacian() {
+        if (!amrex::Initialized()) {
+            op.release();
+            new (&staged_geom) amrex::Vector<amrex::Geometry>();
+            new (&staged_ba) amrex::Vector<amrex::BoxArray>();
+            new (&staged_dm) amrex::Vector<amrex::DistributionMapping>();
+        }
+    }
+
+    void stage_clear() {
+        staged_geom.clear();
+        staged_ba.clear();
+        staged_dm.clear();
+    }
+    void stage_push_level(const JlGeometry& g, const JlBoxArray& ba,
+                          const JlDistributionMapping& dm) {
+        staged_geom.push_back(g.geom);
+        staged_ba.push_back(ba.ba);
+        staged_dm.push_back(dm.dm);
+    }
+    void define_staged(const JlLPInfo& info, double const_sigma) {
+        op = std::make_unique<amrex::MLNodeLaplacian>(
+            staged_geom, staged_ba, staged_dm, info.info,
+            amrex::Vector<amrex::FabFactory<amrex::FArrayBox> const*>{}, const_sigma);
+        stage_clear();
+    }
+
+    void set_domain_bc(int lox, int loy, int loz, int hix, int hiy, int hiz) {
+        op->setDomainBC(
+            {static_cast<amrex::LinOpBCType>(lox),
+             static_cast<amrex::LinOpBCType>(loy),
+             static_cast<amrex::LinOpBCType>(loz)},
+            {static_cast<amrex::LinOpBCType>(hix),
+             static_cast<amrex::LinOpBCType>(hiy),
+             static_cast<amrex::LinOpBCType>(hiz)});
+    }
+    void set_max_order(int o) { op->setMaxOrder(o); }
+    int get_max_order() const { return op->getMaxOrder(); }
+    void set_verbose(int v) { op->setVerbose(v); }
+    void set_enforce_singular_solvable(bool o) { op->setEnforceSingularSolvable(o); }
+
+    void set_sigma(int amrlev, const JlMultiFab& sigma) {
+        op->setSigma(amrlev, *sigma.mf);
+    }
+    void set_gauss_seidel(bool flag) { op->setGaussSeidel(flag); }
+    void set_harmonic_average(bool flag) { op->setHarmonicAverage(flag); }
+
+    void comp_divergence_1(JlMultiFab& rhs, JlMultiFab& vel) {
+        amrex::Vector<amrex::MultiFab*> r{rhs.mf.get()};
+        amrex::Vector<amrex::MultiFab*> v{vel.mf.get()};
+        op->compDivergence(r, v);
+    }
+    void update_velocity_1(JlMultiFab& vel, const JlMultiFab& sol) const {
+        amrex::Vector<amrex::MultiFab*> v{vel.mf.get()};
+        amrex::Vector<amrex::MultiFab const*> s{sol.mf.get()};
+        op->updateVelocity(v, s);
+    }
+};
+
+struct JlMLMG {
+    std::unique_ptr<amrex::MLMG> mlmg;
+    amrex::Vector<amrex::MultiFab*> staged_sol;
+    amrex::Vector<amrex::MultiFab const*> staged_rhs;
+    amrex::Vector<amrex::MultiFab*> staged_out;
+    amrex::Vector<amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>> staged_face_vec;
+
+    explicit JlMLMG(JlMLPoisson& p) : mlmg(std::make_unique<amrex::MLMG>(*p.op)) {}
+    explicit JlMLMG(JlMLABecLaplacian& abec) : mlmg(std::make_unique<amrex::MLMG>(*abec.op)) {}
+    explicit JlMLMG(JlMLNodeLaplacian& nd) : mlmg(std::make_unique<amrex::MLMG>(*nd.op)) {}
+
+    ~JlMLMG() {
+        if (!amrex::Initialized()) {
+            mlmg.release();
+            new (&staged_sol) amrex::Vector<amrex::MultiFab*>();
+            new (&staged_rhs) amrex::Vector<amrex::MultiFab const*>();
+            new (&staged_out) amrex::Vector<amrex::MultiFab*>();
+            new (&staged_face_vec) amrex::Vector<amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM>>();
+        }
+    }
+
+    void set_verbose(int v) { mlmg->setVerbose(v); }
+    void set_bottom_verbose(int v) { mlmg->setBottomVerbose(v); }
+    void set_max_iter(int n) { mlmg->setMaxIter(n); }
+    void set_max_fmg_iter(int n) { mlmg->setMaxFmgIter(n); }
+    void set_fixed_iter(int nit) { mlmg->setFixedIter(nit); }
+    void set_pre_smooth(int n) { mlmg->setPreSmooth(n); }
+    void set_post_smooth(int n) { mlmg->setPostSmooth(n); }
+    void set_final_smooth(int n) { mlmg->setFinalSmooth(n); }
+    void set_bottom_smooth(int n) { mlmg->setBottomSmooth(n); }
+    void set_bottom_solver(int s) {
+        mlmg->setBottomSolver(static_cast<amrex::BottomSolver>(s));
+    }
+    void set_bottom_max_iter(int n) { mlmg->setBottomMaxIter(n); }
+    void set_bottom_tolerance(double t) { mlmg->setBottomTolerance(t); }
+    void set_bottom_tolerance_abs(double t) { mlmg->setBottomToleranceAbs(t); }
+    void set_final_fill_bc(int flag) { mlmg->setFinalFillBC(flag); }
+    int num_amr_levels() const { return mlmg->numAMRLevels(); }
+    double get_init_residual() const { return mlmg->getInitResidual(); }
+    double get_final_residual() const { return mlmg->getFinalResidual(); }
+    double get_init_rhs() const { return mlmg->getInitRHS(); }
+
+    void stage_clear() {
+        staged_sol.clear();
+        staged_rhs.clear();
+        staged_out.clear();
+        staged_face_vec.clear();
+    }
+    void stage_push_sol_rhs(JlMultiFab& sol, const JlMultiFab& rhs) {
+        staged_sol.push_back(sol.mf.get());
+        staged_rhs.push_back(rhs.mf.get());
+    }
+    void stage_push_out_sol_rhs(JlMultiFab& out, JlMultiFab& sol, const JlMultiFab& rhs) {
+        staged_out.push_back(out.mf.get());
+        staged_sol.push_back(sol.mf.get());
+        staged_rhs.push_back(rhs.mf.get());
+    }
+    void stage_push_out_in(JlMultiFab& out, JlMultiFab& in) {
+        staged_out.push_back(out.mf.get());
+        staged_sol.push_back(in.mf.get());
+    }
+    void stage_push_face_vec(JlMultiFab& fx, JlMultiFab& fy, JlMultiFab& fz) {
+        staged_face_vec.push_back({fx.mf.get(), fy.mf.get(), fz.mf.get()});
+    }
+    void stage_push_out(JlMultiFab& out) {
+        staged_out.push_back(out.mf.get());
+    }
+
+    double solve_staged(double tol_rel, double tol_abs) {
+        double res = mlmg->solve(staged_sol, staged_rhs, tol_rel, tol_abs);
+        stage_clear();
+        return res;
+    }
+    void get_grad_solution_staged(int loc) {
+        mlmg->getGradSolution(staged_face_vec,
+                              static_cast<amrex::MLLinOp::Location>(loc));
+        stage_clear();
+    }
+    void get_fluxes_face_staged(int loc) {
+        mlmg->getFluxes(staged_face_vec,
+                        static_cast<amrex::MLLinOp::Location>(loc));
+        stage_clear();
+    }
+    void get_fluxes_cc_staged(int loc) {
+        mlmg->getFluxes(staged_out,
+                        static_cast<amrex::MLLinOp::Location>(loc));
+        stage_clear();
+    }
+    void comp_residual_staged() {
+        mlmg->compResidual(staged_out, staged_sol, staged_rhs);
+        stage_clear();
+    }
+    void apply_staged() {
+        mlmg->apply(staged_out, staged_sol);
+        stage_clear();
+    }
+};
+
+// ============================================================================
 // JLCXX Module Registration
 // ============================================================================
 
@@ -1437,6 +1810,111 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("crse_add!", &JlEdgeFluxRegister::crse_add)
         .method("fine_add!", &JlEdgeFluxRegister::fine_add)
         .method("reflux!", &JlEdgeFluxRegister::reflux);
+
+    // Linear Solvers (LPInfo, MLPoisson, MLABecLaplacian, MLNodeLaplacian, MLMG)
+    mod.add_type<JlLPInfo>("JlLPInfo")
+        .constructor<>()
+        .constructor<int, bool, bool, int, int, bool, int>()
+        .method("set_max_coarsening_level!", &JlLPInfo::set_max_coarsening_level)
+        .method("set_agglomeration!", &JlLPInfo::set_agglomeration)
+        .method("set_consolidation!", &JlLPInfo::set_consolidation)
+        .method("set_agg_grid_size!", &JlLPInfo::set_agg_grid_size)
+        .method("set_con_grid_size!", &JlLPInfo::set_con_grid_size)
+        .method("set_metric_term!", &JlLPInfo::set_metric_term)
+        .method("set_hidden_direction!", &JlLPInfo::set_hidden_direction);
+
+    mod.add_type<JlMLPoisson>("JlMLPoisson")
+        .constructor<>()
+        .constructor<const JlGeometry&, const JlBoxArray&, const JlDistributionMapping&, const JlLPInfo&>()
+        .method("stage_clear!", &JlMLPoisson::stage_clear)
+        .method("stage_push_level!", &JlMLPoisson::stage_push_level)
+        .method("define_staged!", &JlMLPoisson::define_staged)
+        .method("set_domain_bc!", &JlMLPoisson::set_domain_bc)
+        .method("set_domain_bc_loc!", &JlMLPoisson::set_domain_bc_loc)
+        .method("set_level_bc_homog!", &JlMLPoisson::set_level_bc_homog)
+        .method("set_level_bc!", &JlMLPoisson::set_level_bc)
+        .method("set_level_bc_robin!", &JlMLPoisson::set_level_bc_robin)
+        .method("set_coarse_fine_bc!", &JlMLPoisson::set_coarse_fine_bc)
+        .method("set_coarse_fine_bc_homog!", &JlMLPoisson::set_coarse_fine_bc_homog)
+        .method("set_max_order!", &JlMLPoisson::set_max_order)
+        .method("get_max_order", &JlMLPoisson::get_max_order)
+        .method("set_verbose!", &JlMLPoisson::set_verbose)
+        .method("set_enforce_singular_solvable!", &JlMLPoisson::set_enforce_singular_solvable);
+
+    mod.add_type<JlMLABecLaplacian>("JlMLABecLaplacian")
+        .constructor<>()
+        .constructor<const JlGeometry&, const JlBoxArray&, const JlDistributionMapping&, const JlLPInfo&, int>()
+        .method("stage_clear!", &JlMLABecLaplacian::stage_clear)
+        .method("stage_push_level!", &JlMLABecLaplacian::stage_push_level)
+        .method("define_staged!", &JlMLABecLaplacian::define_staged)
+        .method("set_domain_bc!", &JlMLABecLaplacian::set_domain_bc)
+        .method("set_domain_bc_loc!", &JlMLABecLaplacian::set_domain_bc_loc)
+        .method("set_level_bc_homog!", &JlMLABecLaplacian::set_level_bc_homog)
+        .method("set_level_bc!", &JlMLABecLaplacian::set_level_bc)
+        .method("set_level_bc_robin!", &JlMLABecLaplacian::set_level_bc_robin)
+        .method("set_coarse_fine_bc!", &JlMLABecLaplacian::set_coarse_fine_bc)
+        .method("set_coarse_fine_bc_homog!", &JlMLABecLaplacian::set_coarse_fine_bc_homog)
+        .method("set_max_order!", &JlMLABecLaplacian::set_max_order)
+        .method("get_max_order", &JlMLABecLaplacian::get_max_order)
+        .method("set_verbose!", &JlMLABecLaplacian::set_verbose)
+        .method("set_enforce_singular_solvable!", &JlMLABecLaplacian::set_enforce_singular_solvable)
+        .method("set_scalars!", &JlMLABecLaplacian::set_scalars)
+        .method("set_a_coeffs_scalar!", &JlMLABecLaplacian::set_a_coeffs_scalar)
+        .method("set_a_coeffs!", &JlMLABecLaplacian::set_a_coeffs)
+        .method("set_b_coeffs_scalar!", &JlMLABecLaplacian::set_b_coeffs_scalar)
+        .method("set_b_coeffs!", &JlMLABecLaplacian::set_b_coeffs);
+
+    mod.add_type<JlMLNodeLaplacian>("JlMLNodeLaplacian")
+        .constructor<>()
+        .constructor<const JlGeometry&, const JlBoxArray&, const JlDistributionMapping&, const JlLPInfo&, double>()
+        .method("stage_clear!", &JlMLNodeLaplacian::stage_clear)
+        .method("stage_push_level!", &JlMLNodeLaplacian::stage_push_level)
+        .method("define_staged!", &JlMLNodeLaplacian::define_staged)
+        .method("set_domain_bc!", &JlMLNodeLaplacian::set_domain_bc)
+        .method("set_max_order!", &JlMLNodeLaplacian::set_max_order)
+        .method("get_max_order", &JlMLNodeLaplacian::get_max_order)
+        .method("set_verbose!", &JlMLNodeLaplacian::set_verbose)
+        .method("set_enforce_singular_solvable!", &JlMLNodeLaplacian::set_enforce_singular_solvable)
+        .method("set_sigma!", &JlMLNodeLaplacian::set_sigma)
+        .method("set_gauss_seidel!", &JlMLNodeLaplacian::set_gauss_seidel)
+        .method("set_harmonic_average!", &JlMLNodeLaplacian::set_harmonic_average)
+        .method("comp_divergence_1!", &JlMLNodeLaplacian::comp_divergence_1)
+        .method("update_velocity_1!", &JlMLNodeLaplacian::update_velocity_1);
+
+    mod.add_type<JlMLMG>("JlMLMG")
+        .constructor<JlMLPoisson&>()
+        .constructor<JlMLABecLaplacian&>()
+        .constructor<JlMLNodeLaplacian&>()
+        .method("set_verbose!", &JlMLMG::set_verbose)
+        .method("set_bottom_verbose!", &JlMLMG::set_bottom_verbose)
+        .method("set_max_iter!", &JlMLMG::set_max_iter)
+        .method("set_max_fmg_iter!", &JlMLMG::set_max_fmg_iter)
+        .method("set_fixed_iter!", &JlMLMG::set_fixed_iter)
+        .method("set_pre_smooth!", &JlMLMG::set_pre_smooth)
+        .method("set_post_smooth!", &JlMLMG::set_post_smooth)
+        .method("set_final_smooth!", &JlMLMG::set_final_smooth)
+        .method("set_bottom_smooth!", &JlMLMG::set_bottom_smooth)
+        .method("set_bottom_solver!", &JlMLMG::set_bottom_solver)
+        .method("set_bottom_max_iter!", &JlMLMG::set_bottom_max_iter)
+        .method("set_bottom_tolerance!", &JlMLMG::set_bottom_tolerance)
+        .method("set_bottom_tolerance_abs!", &JlMLMG::set_bottom_tolerance_abs)
+        .method("set_final_fill_bc!", &JlMLMG::set_final_fill_bc)
+        .method("num_amr_levels", &JlMLMG::num_amr_levels)
+        .method("get_init_residual", &JlMLMG::get_init_residual)
+        .method("get_final_residual", &JlMLMG::get_final_residual)
+        .method("get_init_rhs", &JlMLMG::get_init_rhs)
+        .method("stage_clear!", &JlMLMG::stage_clear)
+        .method("stage_push_sol_rhs!", &JlMLMG::stage_push_sol_rhs)
+        .method("stage_push_out_sol_rhs!", &JlMLMG::stage_push_out_sol_rhs)
+        .method("stage_push_out_in!", &JlMLMG::stage_push_out_in)
+        .method("stage_push_face_vec!", &JlMLMG::stage_push_face_vec)
+        .method("stage_push_out!", &JlMLMG::stage_push_out)
+        .method("solve_staged!", &JlMLMG::solve_staged)
+        .method("get_grad_solution_staged!", &JlMLMG::get_grad_solution_staged)
+        .method("get_fluxes_face_staged!", &JlMLMG::get_fluxes_face_staged)
+        .method("get_fluxes_cc_staged!", &JlMLMG::get_fluxes_cc_staged)
+        .method("comp_residual_staged!", &JlMLMG::comp_residual_staged)
+        .method("apply_staged!", &JlMLMG::apply_staged);
 
     mod.method("sum_fine_to_coarse_nodal!", [](JlMultiFab& coarse, const JlMultiFab& fine,
                                                int icomp, int ncomp,
