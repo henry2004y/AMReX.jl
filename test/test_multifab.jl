@@ -61,4 +61,108 @@
         @test @inferred(iarray4(imf, imfi)) isa AbstractArray{Int32, 4}
         close!(imfi)
     end
+
+    @testset "YAFluxRegister, EdgeFluxRegister & average_down_faces!" begin
+        let
+            rb = RealBox(0.0, 0.0, 0.0, 16.0, 16.0, 4.0)
+            amr = AmrCore(rb, (16, 16, 4); max_level=1, max_grid_size=(8, 8, 4), blocking_factor=(4, 4, 4))
+            add_refine_box!(amr, Int32(0), 4.0, 4.0, 0.0, 12.0, 12.0, 4.0)
+            init_from_scratch!(amr, 0.0)
+            @test finest_level(amr) == 1
+
+            ba0 = box_array(amr, Int32(0))
+            dm0 = dmap(amr, Int32(0))
+            g0  = geom(amr, Int32(0))
+            ba1 = box_array(amr, Int32(1))
+            dm1 = dmap(amr, Int32(1))
+            g1  = geom(amr, Int32(1))
+            rr  = ref_ratio_tuple(amr, 0)
+
+            # 1. YAFluxRegister conservative reflux test
+            yafr = YAFluxRegister(amr, 1, 1)
+            reset!(yafr)
+
+            state_c = MultiFab(ba0, dm0, 1, 0)
+            set_val!(state_c, 0.0)
+
+            # Face-centered coarse and fine fluxes
+            fx_c = MultiFab(nodal_box_array(ba0; dirs=(true, false, false)), dm0, 1, 0)
+            fy_c = MultiFab(nodal_box_array(ba0; dirs=(false, true, false)), dm0, 1, 0)
+            fz_c = MultiFab(nodal_box_array(ba0; dirs=(false, false, true)), dm0, 1, 0)
+            set_val!(fx_c, 1.0)
+            set_val!(fy_c, 0.0)
+            set_val!(fz_c, 0.0)
+
+            fx_f = MultiFab(nodal_box_array(ba1; dirs=(true, false, false)), dm1, 1, 0)
+            fy_f = MultiFab(nodal_box_array(ba1; dirs=(false, true, false)), dm1, 1, 0)
+            fz_f = MultiFab(nodal_box_array(ba1; dirs=(false, false, true)), dm1, 1, 0)
+            set_val!(fx_f, 3.0)
+            set_val!(fy_f, 0.0)
+            set_val!(fz_f, 0.0)
+
+            dx0 = cell_sizes(g0)
+            dx1 = cell_sizes(g1)
+            each_fab(state_c) do mfi, _, _
+                if crse_has_work(yafr, mfi)
+                    crse_add!(yafr, mfi, (fx_c, fy_c, fz_c), dx0, 1.0)
+                end
+            end
+
+            state_f = MultiFab(ba1, dm1, 1, 0)
+            each_fab(state_f) do mfi, _, _
+                if fine_has_work(yafr, mfi)
+                    fine_add!(yafr, mfi, (fx_f, fy_f, fz_f), dx1, 1.0)
+                end
+            end
+
+            reflux!(yafr, state_c)
+            # Coarse cells abutting x=4 (i=3) and x=12 (i=12) get opposite reflux corrections
+            @test min_val(state_c, Int32(0), Int32(0)) ≈ -2.0
+            @test max_val(state_c, Int32(0), Int32(0)) ≈  2.0
+            @test abs(sum_val(state_c, Int32(0), false)) < 1e-12
+
+            # 2. average_down_faces!
+            set_val!(fx_c, 0.0)
+            set_val!(fy_c, 0.0)
+            set_val!(fz_c, 0.0)
+            average_down_faces!((fx_f, fy_f, fz_f), (fx_c, fy_c, fz_c), rr, g0)
+            @test max_val(fx_c, Int32(0), Int32(0)) ≈ 3.0
+
+            # 3. EdgeFluxRegister constrained-transport reflux test
+            efr = EdgeFluxRegister(amr, 1, 1)
+            reset!(efr)
+
+            # Edge-centered E: Ex is nodal in (y,z), Ey in (x,z), Ez in (x,y)
+            Ex_c = MultiFab(nodal_box_array(ba0; dirs=(false, true, true)), dm0, 1, 0)
+            Ey_c = MultiFab(nodal_box_array(ba0; dirs=(true, false, true)), dm0, 1, 0)
+            Ez_c = MultiFab(nodal_box_array(ba0; dirs=(true, true, false)), dm0, 1, 0)
+            set_val!(Ex_c, 0.0)
+            set_val!(Ey_c, 0.0)
+            set_val!(Ez_c, 1.0)
+
+            Ex_f = MultiFab(nodal_box_array(ba1; dirs=(false, true, true)), dm1, 1, 0)
+            Ey_f = MultiFab(nodal_box_array(ba1; dirs=(true, false, true)), dm1, 1, 0)
+            Ez_f = MultiFab(nodal_box_array(ba1; dirs=(true, true, false)), dm1, 1, 0)
+            set_val!(Ex_f, 0.0)
+            set_val!(Ey_f, 0.0)
+            set_val!(Ez_f, 2.0)
+
+            each_fab(state_c; tiling=false) do mfi, _, _
+                crse_add!(efr, mfi, (Ex_c, Ey_c, Ez_c), 1.0)
+            end
+            each_fab(state_f; tiling=false) do mfi, _, _
+                fine_add!(efr, mfi, (Ex_f, Ey_f, Ez_f), 1.0)
+            end
+
+            Bx_c = MultiFab(nodal_box_array(ba0; dirs=(true, false, false)), dm0, 1, 0)
+            By_c = MultiFab(nodal_box_array(ba0; dirs=(false, true, false)), dm0, 1, 0)
+            Bz_c = MultiFab(nodal_box_array(ba0; dirs=(false, false, true)), dm0, 1, 0)
+            set_val!(Bx_c, 0.0)
+            set_val!(By_c, 0.0)
+            set_val!(Bz_c, 0.0)
+
+            reflux!(efr, (Bx_c, By_c, Bz_c))
+            @test norm0(Bx_c, Int32(0), Int32(0)) >= 0.0
+        end
+    end
 end

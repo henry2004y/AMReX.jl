@@ -23,6 +23,8 @@
 #include <AMReX_PlotFileUtil.H>
 #include <AMReX_RealBox.H>
 #include <AMReX_TagBox.H>
+#include <AMReX_YAFluxRegister.H>
+#include <AMReX_EdgeFluxRegister.H>
 #include <AMReX_iMultiFab.H>
 
 #include <algorithm>
@@ -889,6 +891,120 @@ struct JlParIter {
 };
 
 // ============================================================================
+// Flux Registers (YAFluxRegister & EdgeFluxRegister)
+// ============================================================================
+
+struct JlYAFluxRegister {
+    std::unique_ptr<amrex::YAFluxRegister> fr;
+
+    JlYAFluxRegister() : fr(std::make_unique<amrex::YAFluxRegister>()) {}
+    JlYAFluxRegister(const JlBoxArray& fba, const JlBoxArray& cba,
+                     const JlDistributionMapping& fdm, const JlDistributionMapping& cdm,
+                     const JlGeometry& fgeom, const JlGeometry& cgeom,
+                     int rx, int ry, int rz, int fine_lev, int nvar)
+        : fr(std::make_unique<amrex::YAFluxRegister>(
+              fba.ba, cba.ba, fdm.dm, cdm.dm, fgeom.geom, cgeom.geom,
+              amrex::IntVect(rx, ry, rz), fine_lev, nvar)) {}
+
+    ~JlYAFluxRegister() {
+        if (!amrex::Initialized()) {
+            fr.release();
+        }
+    }
+
+    void reset() { fr->reset(); }
+
+    void crse_add(const JlMFIter& mfi,
+                  const JlMultiFab& fx, const JlMultiFab& fy, const JlMultiFab& fz,
+                  double dx, double dy, double dz, double dt,
+                  int srccomp, int destcomp, int numcomp) {
+        std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> flux{
+            &((*fx.mf)[*mfi.mfi]),
+            &((*fy.mf)[*mfi.mfi]),
+            &((*fz.mf)[*mfi.mfi])
+        };
+        amrex::Real dx_arr[AMREX_SPACEDIM] = {dx, dy, dz};
+        fr->CrseAdd(*mfi.mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp,
+                    amrex::RunOn::Host);
+    }
+
+    void fine_add(const JlMFIter& mfi,
+                  const JlMultiFab& fx, const JlMultiFab& fy, const JlMultiFab& fz,
+                  double dx, double dy, double dz, double dt,
+                  int srccomp, int destcomp, int numcomp) {
+        std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> flux{
+            &((*fx.mf)[*mfi.mfi]),
+            &((*fy.mf)[*mfi.mfi]),
+            &((*fz.mf)[*mfi.mfi])
+        };
+        amrex::Real dx_arr[AMREX_SPACEDIM] = {dx, dy, dz};
+        fr->FineAdd(*mfi.mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp,
+                    amrex::RunOn::Host);
+    }
+
+    void reflux(JlMultiFab& state, int srccomp, int destcomp, int numcomp) {
+        fr->Reflux(*state.mf, srccomp, destcomp, numcomp);
+    }
+
+    bool crse_has_work(const JlMFIter& mfi) const {
+        return fr->CrseHasWork(*mfi.mfi);
+    }
+
+    bool fine_has_work(const JlMFIter& mfi) const {
+        return fr->FineHasWork(*mfi.mfi);
+    }
+};
+
+struct JlEdgeFluxRegister {
+    std::unique_ptr<amrex::EdgeFluxRegister> efr;
+
+    JlEdgeFluxRegister() : efr(std::make_unique<amrex::EdgeFluxRegister>()) {}
+    JlEdgeFluxRegister(const JlBoxArray& fba, const JlBoxArray& cba,
+                       const JlDistributionMapping& fdm, const JlDistributionMapping& cdm,
+                       const JlGeometry& fgeom, const JlGeometry& cgeom,
+                       int nvar)
+        : efr(std::make_unique<amrex::EdgeFluxRegister>(
+              fba.ba, cba.ba, fdm.dm, cdm.dm, fgeom.geom, cgeom.geom, nvar)) {}
+
+    ~JlEdgeFluxRegister() {
+        if (!amrex::Initialized()) {
+            efr.release();
+        }
+    }
+
+    void reset() { efr->reset(); }
+
+    void crse_add(const JlMFIter& mfi,
+                  const JlMultiFab& Ex, const JlMultiFab& Ey, const JlMultiFab& Ez,
+                  double dt_crse) {
+        amrex::Array<amrex::FArrayBox const*, AMREX_SPACEDIM> E_crse{
+            &((*Ex.mf)[*mfi.mfi]),
+            &((*Ey.mf)[*mfi.mfi]),
+            &((*Ez.mf)[*mfi.mfi])
+        };
+        efr->CrseAdd(*mfi.mfi, E_crse, dt_crse);
+    }
+
+    void fine_add(const JlMFIter& mfi,
+                  const JlMultiFab& Ex, const JlMultiFab& Ey, const JlMultiFab& Ez,
+                  double dt_fine) {
+        amrex::Array<amrex::FArrayBox const*, AMREX_SPACEDIM> E_fine{
+            &((*Ex.mf)[*mfi.mfi]),
+            &((*Ey.mf)[*mfi.mfi]),
+            &((*Ez.mf)[*mfi.mfi])
+        };
+        efr->FineAdd(*mfi.mfi, E_fine, dt_fine);
+    }
+
+    void reflux(JlMultiFab& Bx, JlMultiFab& By, JlMultiFab& Bz) const {
+        amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM> B_crse{
+            Bx.mf.get(), By.mf.get(), Bz.mf.get()
+        };
+        efr->Reflux(B_crse);
+    }
+};
+
+// ============================================================================
 // JLCXX Module Registration
 // ============================================================================
 
@@ -1265,6 +1381,62 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         amrex::average_down_nodal(*fine.mf, *coarse.mf,
                                   amrex::IntVect(rx, ry, rz), nghost);
     });
+
+    mod.method("average_down_faces!", [](const JlMultiFab& fx_fine, const JlMultiFab& fy_fine,
+                                         const JlMultiFab& fz_fine,
+                                         JlMultiFab& fx_crse, JlMultiFab& fy_crse,
+                                         JlMultiFab& fz_crse,
+                                         int rx, int ry, int rz, const JlGeometry& cgeom) {
+        amrex::Array<const amrex::MultiFab*, AMREX_SPACEDIM> fine_arr{
+            fx_fine.mf.get(), fy_fine.mf.get(), fz_fine.mf.get()
+        };
+        amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM> crse_arr{
+            fx_crse.mf.get(), fy_crse.mf.get(), fz_crse.mf.get()
+        };
+        amrex::average_down_faces(fine_arr, crse_arr, amrex::IntVect(rx, ry, rz), cgeom.geom);
+    });
+
+    mod.method("average_down_face!", [](const JlMultiFab& fine, JlMultiFab& crse,
+                                        int rx, int ry, int rz, const JlGeometry& cgeom) {
+        amrex::average_down_faces(*fine.mf, *crse.mf, amrex::IntVect(rx, ry, rz), cgeom.geom);
+    });
+
+    mod.method("average_down_edges!", [](const JlMultiFab& ex_fine, const JlMultiFab& ey_fine,
+                                         const JlMultiFab& ez_fine,
+                                         JlMultiFab& ex_crse, JlMultiFab& ey_crse,
+                                         JlMultiFab& ez_crse,
+                                         int rx, int ry, int rz, int ngcrse) {
+        amrex::Array<const amrex::MultiFab*, AMREX_SPACEDIM> fine_arr{
+            ex_fine.mf.get(), ey_fine.mf.get(), ez_fine.mf.get()
+        };
+        amrex::Array<amrex::MultiFab*, AMREX_SPACEDIM> crse_arr{
+            ex_crse.mf.get(), ey_crse.mf.get(), ez_crse.mf.get()
+        };
+        amrex::average_down_edges(fine_arr, crse_arr, amrex::IntVect(rx, ry, rz), ngcrse);
+    });
+
+    mod.add_type<JlYAFluxRegister>("JlYAFluxRegister")
+        .constructor<>()
+        .constructor<const JlBoxArray&, const JlBoxArray&,
+                     const JlDistributionMapping&, const JlDistributionMapping&,
+                     const JlGeometry&, const JlGeometry&,
+                     int, int, int, int, int>()
+        .method("reset!", &JlYAFluxRegister::reset)
+        .method("crse_add!", &JlYAFluxRegister::crse_add)
+        .method("fine_add!", &JlYAFluxRegister::fine_add)
+        .method("reflux!", &JlYAFluxRegister::reflux)
+        .method("crse_has_work", &JlYAFluxRegister::crse_has_work)
+        .method("fine_has_work", &JlYAFluxRegister::fine_has_work);
+
+    mod.add_type<JlEdgeFluxRegister>("JlEdgeFluxRegister")
+        .constructor<>()
+        .constructor<const JlBoxArray&, const JlBoxArray&,
+                     const JlDistributionMapping&, const JlDistributionMapping&,
+                     const JlGeometry&, const JlGeometry&, int>()
+        .method("reset!", &JlEdgeFluxRegister::reset)
+        .method("crse_add!", &JlEdgeFluxRegister::crse_add)
+        .method("fine_add!", &JlEdgeFluxRegister::fine_add)
+        .method("reflux!", &JlEdgeFluxRegister::reflux);
 
     mod.method("sum_fine_to_coarse_nodal!", [](JlMultiFab& coarse, const JlMultiFab& fine,
                                                int icomp, int ncomp,

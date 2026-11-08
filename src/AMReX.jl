@@ -63,6 +63,7 @@ end
 include("box_geometry.jl")
 include("multifab.jl")
 include("amrcore.jl")
+include("flux_register.jl")
 include("particles.jl")
 include("io.jl")
 
@@ -119,7 +120,10 @@ export finest_level, max_level, geom, geometry, dmap, dist_map, node_box_array, 
 export mpi_rank, parallel_reduce_sum
 export set_box_array!, set_dmap!, set_finest_level!
 export interp_from_coarse_to_fine!, fill_patch_single_level!, fill_patch_two_levels!
-export average_down!, average_down_nodal!, sum_fine_to_coarse_nodal!
+export average_down!, average_down_nodal!, average_down_faces!, average_down_face!, average_down_edges!, sum_fine_to_coarse_nodal!
+export JlYAFluxRegister, JlYAFluxRegisterAllocated, YAFluxRegister
+export JlEdgeFluxRegister, JlEdgeFluxRegisterAllocated, EdgeFluxRegister
+export reset!, crse_add!, fine_add!, reflux!, crse_has_work, fine_has_work
 
 export JlParticleContainer, JlParticleContainerAllocated, ParticleContainer, JlParIter, JlParIterAllocated
 export pack_idcpu, unpack_id, unpack_cpu, is_valid_idcpu, make_invalid_idcpu, make_valid_idcpu
