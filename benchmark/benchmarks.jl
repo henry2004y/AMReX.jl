@@ -47,7 +47,12 @@ let
     end
     SUITE["multifab"]["saxpy!"] = @benchmarkable saxpy!($mf_c, 0.5, $mf_a, 0, 0, 3, 0)
     SUITE["multifab"]["lincomb!"] = @benchmarkable lincomb!($mf_c, 0.5, $mf_a, 0, 1.5, $mf_b, 0, 0, 3, 0)
+    SUITE["multifab"]["dot_mf"] = @benchmarkable dot_mf($mf_a, $mf_b; comp1 = 0, comp2 = 0, ncomp = 3, nghost = 0)
     SUITE["multifab"]["fill_boundary!"] = @benchmarkable fill_boundary!($mf_a, $geom)
+    SUITE["multifab"]["fill_boundary_nowait_finish!"] = @benchmarkable begin
+        fill_boundary_nowait!($mf_a, $geom)
+        fill_boundary_finish!($mf_a)
+    end
     SUITE["multifab"]["sum_boundary!"] = @benchmarkable sum_boundary!($mf_a, $geom)
 end
 

@@ -54,13 +54,14 @@ at `mfi`, where `(i, j, k)` spans the full allocated `fab_box` (including ghost 
 in 0-based AMReX coordinates and `n` spans `1:n_comp(mf)`.
 """
 @inline function array4(mf::JlMultiFab, mfi::JlMFIter)
-    rx = Int(fab_lo(mfi, mf, Int32(0))):Int(fab_hi(mfi, mf, Int32(0)))
-    ry = Int(fab_lo(mfi, mf, Int32(1))):Int(fab_hi(mfi, mf, Int32(1)))
-    rz = Int(fab_lo(mfi, mf, Int32(2))):Int(fab_hi(mfi, mf, Int32(2)))
-    nx, ny, nz = length(rx), length(ry), length(rz)
-    nc = Int(n_comp(mf))
-    ptr = data_ptr(mfi, mf).cpp_object
-    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, nc); own = false)
+    info = Ref{NTuple{7, Int32}}()
+    ptr = GC.@preserve info fab_info!(mfi, mf, Base.unsafe_convert(Ptr{Int32}, info)).cpp_object
+    lo0, lo1, lo2, hi0, hi1, hi2, nc32 = info[]
+    rx = Int(lo0):Int(hi0)
+    ry = Int(lo1):Int(hi1)
+    rz = Int(lo2):Int(hi2)
+    nc = Int(nc32)
+    raw = unsafe_wrap(Array, ptr, (length(rx), length(ry), length(rz), nc); own = false)
     return OffsetArray(raw, rx, ry, rz, 1:nc)
 end
 
@@ -71,13 +72,14 @@ Return a zero-copy 4D `OffsetArray` view `(i, j, k, n)` over the local `IArrayBo
 at `mfi`, where `(i, j, k)` spans `fab_box(mfi)` and `n` spans `1:n_comp(imf)`.
 """
 @inline function iarray4(imf::JliMultiFab, mfi::JlMFIter)
-    rx = Int(ifab_lo(mfi, imf, Int32(0))):Int(ifab_hi(mfi, imf, Int32(0)))
-    ry = Int(ifab_lo(mfi, imf, Int32(1))):Int(ifab_hi(mfi, imf, Int32(1)))
-    rz = Int(ifab_lo(mfi, imf, Int32(2))):Int(ifab_hi(mfi, imf, Int32(2)))
-    nx, ny, nz = length(rx), length(ry), length(rz)
-    nc = Int(n_comp(imf))
-    ptr = idata_ptr(mfi, imf).cpp_object
-    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, nc); own = false)
+    info = Ref{NTuple{7, Int32}}()
+    ptr = GC.@preserve info ifab_info!(mfi, imf, Base.unsafe_convert(Ptr{Int32}, info)).cpp_object
+    lo0, lo1, lo2, hi0, hi1, hi2, nc32 = info[]
+    rx = Int(lo0):Int(hi0)
+    ry = Int(lo1):Int(hi1)
+    rz = Int(lo2):Int(hi2)
+    nc = Int(nc32)
+    raw = unsafe_wrap(Array, ptr, (length(rx), length(ry), length(rz), nc); own = false)
     return OffsetArray(raw, rx, ry, rz, 1:nc)
 end
 
@@ -174,24 +176,13 @@ function saxpy!(
         scomp::Integer = 0, dcomp::Integer = 0,
         ncomp::Integer = Int(n_comp(dst)), nghost::Integer = 0
     )
-    af = Float64(a)
     sc = Int(scomp)
     dc = Int(dcomp)
     nc = Int(ncomp)
     ng = Int(nghost)
     (0 <= sc && sc + nc <= Int(n_comp(src))) || throw(BoundsError("saxpy! scomp=$sc, ncomp=$nc out of bounds for src with $(n_comp(src)) components (0-based)"))
     (0 <= dc && dc + nc <= Int(n_comp(dst))) || throw(BoundsError("saxpy! dcomp=$dc, ncomp=$nc out of bounds for dst with $(n_comp(dst)) components (0-based)"))
-    each_fab(dst) do mfi, vbx, d_arr
-        s_arr = array4(src, mfi)
-        rx0, ry0, rz0 = bounds(vbx)
-        frx, fry, frz = axes(d_arr)[1:3]
-        rx = max(first(frx), first(rx0) - ng):min(last(frx), last(rx0) + ng)
-        ry = max(first(fry), first(ry0) - ng):min(last(fry), last(ry0) + ng)
-        rz = max(first(frz), first(rz0) - ng):min(last(frz), last(rz0) + ng)
-        @inbounds for c in 1:nc, k in rz, j in ry, i in rx
-            d_arr[i, j, k, dc + c] += af * s_arr[i, j, k, sc + c]
-        end
-    end
+    saxpy_from!(dst, Float64(a), src, Int32(sc), Int32(dc), Int32(nc), Int32(ng))
     return dst
 end
 
@@ -199,7 +190,8 @@ end
     lincomb!(dst::JlMultiFab, a::Real, x::JlMultiFab, xcomp::Integer, b::Real, y::JlMultiFab, ycomp::Integer, dcomp::Integer, ncomp::Integer, nghost::Integer)
 
 Compute the linear combination `dst[dcomp + c] = a * x[xcomp + c] + b * y[ycomp + c]`
-for `c in 1:ncomp` (0-based `xcomp`, `ycomp`, `dcomp`) over the valid box plus `nghost` ghost cells.
+for `c in 1:ncomp` (0-based `xcomp`, `ycomp`, `dcomp`) over the valid box plus `nghost` ghost cells
+via native `amrex::MultiFab::LinComb`.
 """
 function lincomb!(
         dst::JlMultiFab,
@@ -207,8 +199,6 @@ function lincomb!(
         b::Real, y::JlMultiFab, ycomp::Integer,
         dcomp::Integer, ncomp::Integer, nghost::Integer
     )
-    af = Float64(a)
-    bf = Float64(b)
     xc = Int(xcomp)
     yc = Int(ycomp)
     dc = Int(dcomp)
@@ -217,17 +207,73 @@ function lincomb!(
     (0 <= xc && xc + nc <= Int(n_comp(x))) || throw(BoundsError("lincomb! xcomp=$xc, ncomp=$nc out of bounds for x with $(n_comp(x)) components (0-based)"))
     (0 <= yc && yc + nc <= Int(n_comp(y))) || throw(BoundsError("lincomb! ycomp=$yc, ncomp=$nc out of bounds for y with $(n_comp(y)) components (0-based)"))
     (0 <= dc && dc + nc <= Int(n_comp(dst))) || throw(BoundsError("lincomb! dcomp=$dc, ncomp=$nc out of bounds for dst with $(n_comp(dst)) components (0-based)"))
-    each_fab(dst) do mfi, vbx, d_arr
-        x_arr = array4(x, mfi)
-        y_arr = array4(y, mfi)
-        rx0, ry0, rz0 = bounds(vbx)
-        frx, fry, frz = axes(d_arr)[1:3]
-        rx = max(first(frx), first(rx0) - ng):min(last(frx), last(rx0) + ng)
-        ry = max(first(fry), first(ry0) - ng):min(last(fry), last(ry0) + ng)
-        rz = max(first(frz), first(rz0) - ng):min(last(frz), last(rz0) + ng)
-        @inbounds for c in 1:nc, k in rz, j in ry, i in rx
-            d_arr[i, j, k, dc + c] = af * x_arr[i, j, k, xc + c] + bf * y_arr[i, j, k, yc + c]
-        end
+    lincomb_from!(dst, Float64(a), x, Int32(xc), Float64(b), y, Int32(yc), Int32(dc), Int32(nc), Int32(ng))
+    return dst
+end
+
+"""
+    dot_mf(x::JlMultiFab, y::JlMultiFab; comp1=0, comp2=0, ncomp=n_comp(x), nghost=0, local_only=false) -> Float64
+
+Compute the inner product `∑ x[comp1 + c] * y[comp2 + c]` across all valid cells (plus `nghost`
+ghost cells) via native `amrex::MultiFab::Dot` (MPI-global unless `local_only=true`).
+"""
+function dot_mf(
+        x::JlMultiFab, y::JlMultiFab;
+        comp1::Integer = 0, comp2::Integer = 0,
+        ncomp::Integer = Int(n_comp(x)), nghost::Integer = 0,
+        local_only::Bool = false
+    )
+    return Float64(dot_with(x, y, Int32(comp1), Int32(comp2), Int32(ncomp), Int32(nghost), local_only))
+end
+
+"""
+    fill_boundary_nowait!(mf::JlMultiFab, geom::JlGeometry; icomp=nothing, ncomp=nothing)
+
+Initiate a non-blocking MPI ghost-cell exchange (`FillBoundary_nowait`). Pair with
+`fill_boundary_finish!(mf)` to overlap communication with interior computation.
+"""
+function fill_boundary_nowait!(
+        mf::JlMultiFab, geom::JlGeometry;
+        icomp::Union{Nothing, Integer} = nothing,
+        ncomp::Union{Nothing, Integer} = nothing
+    )
+    sc = Int32(something(icomp, 0))
+    nc = Int32(something(ncomp, Int(n_comp(mf)) - Int(sc)))
+    fill_boundary_comp_nowait!(mf, sc, nc, geom)
+    return mf
+end
+
+"""
+    parallel_copy!(dst, src, geom; scomp=0, dcomp=0, ncomp=n_comp(dst), snghost=0, dnghost=0)
+
+MPI-safe copy of `ncomp` components from `src` to `dst` across arbitrary `BoxArray` and
+`DistributionMapping` layouts, supporting isotropic or anisotropic `(ngx, ngy, ngz)` ghost counts.
+Works on both `JlMultiFab` and `JliMultiFab`.
+"""
+function parallel_copy!(
+        dst::Union{JlMultiFab, JliMultiFab},
+        src::Union{JlMultiFab, JliMultiFab},
+        geom::JlGeometry;
+        scomp::Integer = 0,
+        dcomp::Integer = 0,
+        ncomp::Integer = Int(n_comp(dst)),
+        snghost::Union{Integer, NTuple{3, Integer}} = 0,
+        dnghost::Union{Integer, NTuple{3, Integer}} = 0
+    )
+    if snghost isa Integer && dnghost isa Integer
+        parallel_copy_from!(
+            dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp),
+            Int32(snghost), Int32(dnghost), geom
+        )
+    else
+        sg = snghost isa Integer ? (snghost, snghost, snghost) : snghost
+        dg = dnghost isa Integer ? (dnghost, dnghost, dnghost) : dnghost
+        parallel_copy_from_aniso!(
+            dst, src, Int32(scomp), Int32(dcomp), Int32(ncomp),
+            Int32(sg[1]), Int32(sg[2]), Int32(sg[3]),
+            Int32(dg[1]), Int32(dg[2]), Int32(dg[3]),
+            geom
+        )
     end
     return dst
 end

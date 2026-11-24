@@ -46,10 +46,33 @@
         @test min_val(mf_a, Int32(0), Int32(0)) ≈ 3.5
         lincomb!(mf_dst, 2.0, mf_a, 0, -1.0, mf_b, 0, 0, 1, 0)
         @test max_val(mf_dst, Int32(0), Int32(0)) ≈ 4.0
+        @test dot_mf(mf_a, mf_b; comp1 = 0, comp2 = 0, ncomp = 1, nghost = 0) ≈ 3.5 * 3.0 * 64.0
+
+        # Non-blocking FillBoundary_nowait + FillBoundary_finish
+        mf_nb = MultiFab(ba, dm, 1, 1)
+        set_val!(mf_nb, 0.0)
+        each_fab(mf_nb) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            for k in rz, j in ry, i in rx
+                arr[i, j, k, 1] = Float64(10 * i + j)
+            end
+        end
+        fill_boundary_nowait!(mf_nb, geom)
+        fill_boundary_finish!(mf_nb)
+        each_fab(mf_nb) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            if first(rx) == 0 && first(ry) == 0
+                @test arr[-1, 0, 0, 1] ≈ 70.0
+            end
+        end
 
         imf = iMultiFab(ba, dm, 1, 1)
         set_val!(imf, Int32(3))
         @test min_val(imf, Int32(0), Int32(0)) == 3
+        imf_dst = iMultiFab(ba, dm, 1, 1)
+        set_val!(imf_dst, Int32(0))
+        parallel_copy!(imf_dst, imf, geom; snghost = (1, 1, 0), dnghost = (1, 1, 0))
+        @test min_val(imf_dst, Int32(0), Int32(0)) == 3
         @test mf isa JlMultiFabAllocated
         @test imf isa JliMultiFabAllocated
 

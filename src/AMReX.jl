@@ -95,18 +95,18 @@ export parallel_reduce_sum_real, parallel_reduce_max_real, parallel_reduce_min_r
 export parallel_reduce_sum_long, parallel_reduce_sum_real_vec!
 
 export JlBox, JlBoxAllocated, Box, bounds, lo, hi, is_nodal, num_pts, is_empty, contains
-export surrounding_nodes, enclosed_cells, grow, intersect
+export surrounding_nodes, enclosed_cells, grow, coarsen, refine, shift, intersects, intersect
 export JlRealBox, JlRealBoxAllocated, RealBox
 export JlGeometry, JlGeometryAllocated, Geometry, cell_size, inv_cell_size, prob_lo, prob_hi, domain, prob_domain, is_periodic
 export cell_sizes, inv_cell_sizes, prob_lo_tuple, prob_hi_tuple
-export JlBoxArray, JlBoxArrayAllocated, BoxArray, max_size!, convert_to_nodal, nodal_box_array, get_box, contains_cell
-export JlDistributionMapping, JlDistributionMappingAllocated, DistributionMapping, get_rank
+export JlBoxArray, JlBoxArrayAllocated, BoxArray, max_size!, convert_to_nodal, nodal_box_array, get_box, contains_cell, coarsenable
+export JlDistributionMapping, JlDistributionMappingAllocated, DistributionMapping, get_rank, make_knapsack_dmap, make_sfc_dmap
 
 export JlMultiFab, JlMultiFabAllocated, MultiFab, JliMultiFab, JliMultiFabAllocated, iMultiFab, JlMFIter, JlMFIterAllocated
 export n_comp, n_grow, local_size, box_array, dmap
-export set_val!, set_val_comp!, plus_val!, mult_val!, add_from!, copy_from!, parallel_copy_from!
-export copy!, plus!, scale!, saxpy!, lincomb!
-export fill_boundary!, fill_boundary_comp!, sum_boundary!, sum_boundary_comp!
+export set_val!, set_val_comp!, plus_val!, mult_val!, add_from!, copy_from!, parallel_copy_from!, parallel_copy!
+export copy!, plus!, scale!, saxpy!, lincomb!, dot_mf
+export fill_boundary!, fill_boundary_comp!, fill_boundary_nowait!, fill_boundary_finish!, sum_boundary!, sum_boundary_comp!
 export min_val, max_val, norm0, norm1, norm2, sum_val
 export is_valid, next!, close!, index, grid_index, local_tile_index, valid_box, tile_box, fab_box
 export fab_lo, fab_hi, ifab_lo, ifab_hi, tfab_lo, tfab_hi, array4, iarray4, tag_array4, each_fab
@@ -118,6 +118,7 @@ export JlTagBoxArray, JlTagBoxArrayAllocated, TagBoxArray, TagVal, TagClear, Tag
 export add_refine_box!, add_tag_box!, clear_refine_boxes!, set_tag_mask!, set_tag_boxes!, clear_tag_masks!
 export on_error_est!, tag_cells_by_value!, tag_cells_by_grad!, init_from_scratch!, regrid_levels!
 export finest_level, max_level, geom, geometry, dmap, dist_map, node_box_array, ref_ratio, ref_ratio_tuple
+export make_fine_mask, coarsened_multifab
 export mpi_rank, parallel_reduce_sum
 export set_box_array!, set_dmap!, set_finest_level!
 export interp_from_coarse_to_fine!, fill_patch_single_level!, fill_patch_two_levels!

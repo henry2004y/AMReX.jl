@@ -138,16 +138,45 @@ struct JlBox {
     JlBox surrounding_nodes() const {
         return JlBox(amrex::surroundingNodes(box));
     }
+    JlBox surrounding_nodes_dir(int dir) const {
+        return JlBox(amrex::surroundingNodes(box, dir));
+    }
     JlBox enclosed_cells() const {
         return JlBox(amrex::enclosedCells(box));
+    }
+    JlBox enclosed_cells_dir(int dir) const {
+        return JlBox(amrex::enclosedCells(box, dir));
     }
     JlBox grow(int n) const {
         amrex::Box b = box;
         b.grow(n);
         return JlBox(b);
     }
+    JlBox grow_aniso(int nx, int ny, int nz) const {
+        amrex::Box b = box;
+        b.grow(amrex::IntVect(nx, ny, nz));
+        return JlBox(b);
+    }
+    JlBox coarsen(int rx, int ry, int rz) const {
+        return JlBox(amrex::coarsen(box, amrex::IntVect(rx, ry, rz)));
+    }
+    JlBox refine(int rx, int ry, int rz) const {
+        return JlBox(amrex::refine(box, amrex::IntVect(rx, ry, rz)));
+    }
+    JlBox shift(int sx, int sy, int sz) const {
+        return JlBox(amrex::shift(box, amrex::IntVect(sx, sy, sz)));
+    }
+    bool intersects(const JlBox& other) const {
+        return box.intersects(other.box);
+    }
     JlBox intersect(const JlBox& other) const {
         return JlBox(box & other.box);
+    }
+    void fill_bounds(int32_t* out6) const {
+        const auto lo = box.smallEnd();
+        const auto hi = box.bigEnd();
+        out6[0] = lo[0]; out6[1] = lo[1]; out6[2] = lo[2];
+        out6[3] = hi[0]; out6[4] = hi[1]; out6[5] = hi[2];
     }
 };
 
@@ -207,6 +236,26 @@ struct JlBoxArray {
     JlBoxArray convert_to_nodal(int nx, int ny, int nz) const {
         return JlBoxArray(amrex::convert(ba, amrex::IntVect(nx, ny, nz)));
     }
+    JlBoxArray coarsen(int rx, int ry, int rz) const {
+        amrex::BoxArray out = ba;
+        out.coarsen(amrex::IntVect(rx, ry, rz));
+        return JlBoxArray(out);
+    }
+    JlBoxArray refine(int rx, int ry, int rz) const {
+        amrex::BoxArray out = ba;
+        out.refine(amrex::IntVect(rx, ry, rz));
+        return JlBoxArray(out);
+    }
+    JlBoxArray grow(int nx, int ny, int nz) const {
+        amrex::BoxArray out = ba;
+        out.grow(amrex::IntVect(nx, ny, nz));
+        return JlBoxArray(out);
+    }
+    bool coarsenable(int rx, int ry, int rz) const {
+        return ba.coarsenable(amrex::IntVect(rx, ry, rz));
+    }
+    int64_t num_pts() const { return ba.numPts(); }
+    bool intersects_box(const JlBox& bx) const { return ba.intersects(bx.box); }
     int64_t size() const { return ba.size(); }
     bool empty() const { return ba.empty(); }
     JlBox get_box(int64_t i) const { return JlBox(ba[i]); }
@@ -282,11 +331,40 @@ struct JlMultiFab {
                          amrex::IntVect(snghost), amrex::IntVect(dnghost),
                          geom.geom.periodicity());
     }
+    void parallel_copy_from_aniso(const JlMultiFab& src, int scomp, int dcomp, int ncomp,
+                                  int sgx, int sgy, int sgz,
+                                  int dgx, int dgy, int dgz,
+                                  const JlGeometry& geom) {
+        mf->ParallelCopy(*src.mf, scomp, dcomp, ncomp,
+                         amrex::IntVect(sgx, sgy, sgz), amrex::IntVect(dgx, dgy, dgz),
+                         geom.geom.periodicity());
+    }
+    void saxpy_from(double a, const JlMultiFab& src, int scomp, int dcomp, int ncomp, int nghost) {
+        amrex::MultiFab::Saxpy(*mf, a, *src.mf, scomp, dcomp, ncomp, nghost);
+    }
+    void lincomb_from(double a, const JlMultiFab& x, int xcomp,
+                      double b, const JlMultiFab& y, int ycomp,
+                      int dcomp, int ncomp, int nghost) {
+        amrex::MultiFab::LinComb(*mf, a, *x.mf, xcomp, b, *y.mf, ycomp, dcomp, ncomp, nghost);
+    }
+    double dot_with(const JlMultiFab& other, int comp1, int comp2,
+                    int ncomp, int nghost, bool local) const {
+        return amrex::MultiFab::Dot(*mf, comp1, *other.mf, comp2, ncomp, nghost, local);
+    }
     void fill_boundary(const JlGeometry& geom) {
         mf->FillBoundary(geom.geom.periodicity());
     }
     void fill_boundary_comp(int icomp, int ncomp, const JlGeometry& geom) {
         mf->FillBoundary(icomp, ncomp, geom.geom.periodicity());
+    }
+    void fill_boundary_nowait(const JlGeometry& geom) {
+        mf->FillBoundary_nowait(geom.geom.periodicity());
+    }
+    void fill_boundary_comp_nowait(int icomp, int ncomp, const JlGeometry& geom) {
+        mf->FillBoundary_nowait(icomp, ncomp, geom.geom.periodicity());
+    }
+    void fill_boundary_finish() {
+        mf->FillBoundary_finish();
     }
     void sum_boundary(const JlGeometry& geom) {
         mf->SumBoundary(geom.geom.periodicity());
@@ -339,6 +417,20 @@ struct JliMultiFab {
                    int nghost) {
         amrex::iMultiFab::Copy(*imf, *src.imf, scomp, dcomp, ncomp,
                                amrex::IntVect(nghost));
+    }
+    void parallel_copy_from(const JliMultiFab& src, int scomp, int dcomp, int ncomp,
+                            int snghost, int dnghost, const JlGeometry& geom) {
+        imf->ParallelCopy(*src.imf, scomp, dcomp, ncomp,
+                          amrex::IntVect(snghost), amrex::IntVect(dnghost),
+                          geom.geom.periodicity());
+    }
+    void parallel_copy_from_aniso(const JliMultiFab& src, int scomp, int dcomp, int ncomp,
+                                  int sgx, int sgy, int sgz,
+                                  int dgx, int dgy, int dgz,
+                                  const JlGeometry& geom) {
+        imf->ParallelCopy(*src.imf, scomp, dcomp, ncomp,
+                          amrex::IntVect(sgx, sgy, sgz), amrex::IntVect(dgx, dgy, dgz),
+                          geom.geom.periodicity());
     }
     void fill_boundary(const JlGeometry& geom) {
         imf->FillBoundary(geom.geom.periodicity());
@@ -427,6 +519,35 @@ struct JlMFIter {
     int8_t* tdata_ptr(JlTagBoxArray& tb) const {
         return reinterpret_cast<int8_t*>((*tb.tags)[*mfi].dataPtr());
     }
+    double* fab_info(JlMultiFab& mf, int32_t* out7) const {
+        auto& fab = (*mf.mf)[*mfi];
+        const auto& bx = fab.box();
+        const auto lo = bx.smallEnd();
+        const auto hi = bx.bigEnd();
+        out7[0] = lo[0]; out7[1] = lo[1]; out7[2] = lo[2];
+        out7[3] = hi[0]; out7[4] = hi[1]; out7[5] = hi[2];
+        out7[6] = mf.n_comp();
+        return fab.dataPtr();
+    }
+    int* ifab_info(JliMultiFab& imf, int32_t* out7) const {
+        auto& fab = (*imf.imf)[*mfi];
+        const auto& bx = fab.box();
+        const auto lo = bx.smallEnd();
+        const auto hi = bx.bigEnd();
+        out7[0] = lo[0]; out7[1] = lo[1]; out7[2] = lo[2];
+        out7[3] = hi[0]; out7[4] = hi[1]; out7[5] = hi[2];
+        out7[6] = imf.n_comp();
+        return fab.dataPtr();
+    }
+    int8_t* tfab_info(JlTagBoxArray& tb, int32_t* out6) const {
+        auto& fab = (*tb.tags)[*mfi];
+        const auto& bx = fab.box();
+        const auto lo = bx.smallEnd();
+        const auto hi = bx.bigEnd();
+        out6[0] = lo[0]; out6[1] = lo[1]; out6[2] = lo[2];
+        out6[3] = hi[0]; out6[4] = hi[1]; out6[5] = hi[2];
+        return reinterpret_cast<int8_t*>(fab.dataPtr());
+    }
 };
 
 // ============================================================================
@@ -464,18 +585,21 @@ private:
         return amrex::Geometry(dom, rb.rbox, coord, is_per);
     }
 
-    static amrex::AmrInfo make_amr_info(int max_level_in, int nz,
+    static amrex::AmrInfo make_amr_info(int max_level_in, int ny, int nz,
                                         int max_grid_x, int max_grid_y, int max_grid_z,
                                         int block_x, int block_y, int block_z,
-                                        double grid_eff) {
+                                        double grid_eff,
+                                        int rrx = 2, int rry = 2, int rrz = 2,
+                                        int n_err_buf = 1) {
         amrex::AmrInfo info;
         info.max_level = max_level_in;
         info.ref_ratio.assign(std::max(1, max_level_in),
-                              amrex::IntVect(2, 2, (nz == 1) ? 1 : 2));
+                              amrex::IntVect(rrx, (ny == 1) ? 1 : rry, (nz == 1) ? 1 : rrz));
         info.blocking_factor.assign(max_level_in + 1,
-                                    amrex::IntVect(block_x, block_y, (nz == 1) ? 1 : block_z));
+                                    amrex::IntVect(block_x, (ny == 1) ? 1 : block_y, (nz == 1) ? 1 : block_z));
         info.max_grid_size.assign(max_level_in + 1,
                                   amrex::IntVect(max_grid_x, max_grid_y, max_grid_z));
+        info.n_error_buf.assign(std::max(1, max_level_in), amrex::IntVect(n_err_buf));
         info.grid_eff = grid_eff;
         return info;
     }
@@ -490,11 +614,14 @@ public:
                 bool px, bool py, bool pz,
                 int max_grid_x, int max_grid_y, int max_grid_z,
                 int block_x, int block_y, int block_z,
-                double grid_eff)
+                double grid_eff,
+                int rrx = 2, int rry = 2, int rrz = 2,
+                int n_err_buf = 1)
         : amrex::AmrCore(
               make_base_geom(rb, nx, ny, nz, coord, px, py, pz),
-              make_amr_info(max_level_in, nz, max_grid_x, max_grid_y, max_grid_z,
-                            block_x, block_y, block_z, grid_eff)) {
+              make_amr_info(max_level_in, ny, nz, max_grid_x, max_grid_y, max_grid_z,
+                            block_x, block_y, block_z, grid_eff,
+                            rrx, rry, rrz, n_err_buf)) {
         refine_boxes.resize(std::max(1, max_level_in));
         tag_masks.resize(std::max(1, max_level_in));
         tag_boxes.resize(std::max(1, max_level_in));
@@ -633,6 +760,18 @@ struct JlAmrCore {
         : core(std::make_shared<AmrCoreImpl>(
               rb, max_level_in, nx, ny, nz, coord, px, py, pz,
               max_grid_x, max_grid_y, max_grid_z, block_x, block_y, block_z, grid_eff)) {}
+
+    JlAmrCore(const JlRealBox& rb, int max_level_in,
+              int nx, int ny, int nz, int coord,
+              bool px, bool py, bool pz,
+              int max_grid_x, int max_grid_y, int max_grid_z,
+              int block_x, int block_y, int block_z,
+              double grid_eff,
+              int rrx, int rry, int rrz, int n_err_buf)
+        : core(std::make_shared<AmrCoreImpl>(
+              rb, max_level_in, nx, ny, nz, coord, px, py, pz,
+              max_grid_x, max_grid_y, max_grid_z, block_x, block_y, block_z, grid_eff,
+              rrx, rry, rrz, n_err_buf)) {}
 
     ~JlAmrCore() {
         if (!amrex::Initialized()) {
@@ -1541,9 +1680,17 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("is_empty", &JlBox::is_empty)
         .method("contains", &JlBox::contains)
         .method("surrounding_nodes", &JlBox::surrounding_nodes)
+        .method("surrounding_nodes_dir", &JlBox::surrounding_nodes_dir)
         .method("enclosed_cells", &JlBox::enclosed_cells)
+        .method("enclosed_cells_dir", &JlBox::enclosed_cells_dir)
         .method("grow", &JlBox::grow)
-        .method("intersect", &JlBox::intersect);
+        .method("grow_aniso", &JlBox::grow_aniso)
+        .method("coarsen", &JlBox::coarsen)
+        .method("refine", &JlBox::refine)
+        .method("shift", &JlBox::shift)
+        .method("intersects", &JlBox::intersects)
+        .method("intersect", &JlBox::intersect)
+        .method("fill_bounds!", &JlBox::fill_bounds);
 
     // JlRealBox
     mod.add_type<JlRealBox>("JlRealBox")
@@ -1572,10 +1719,27 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .constructor<const JlBox&>()
         .method("max_size!", &JlBoxArray::max_size)
         .method("convert_to_nodal", &JlBoxArray::convert_to_nodal)
+        .method("coarsen", &JlBoxArray::coarsen)
+        .method("refine", &JlBoxArray::refine)
+        .method("grow", &JlBoxArray::grow)
+        .method("coarsenable", &JlBoxArray::coarsenable)
+        .method("num_pts", &JlBoxArray::num_pts)
+        .method("intersects_box", &JlBoxArray::intersects_box)
         .method("size", &JlBoxArray::size)
         .method("empty", &JlBoxArray::empty)
         .method("get_box", &JlBoxArray::get_box)
         .method("contains_cell", &JlBoxArray::contains_cell);
+
+    mod.method("make_box_array_from_bounds", [](const int32_t* bounds6, int64_t nboxes) {
+        amrex::BoxList bl;
+        bl.reserve(static_cast<std::size_t>(nboxes));
+        for (int64_t i = 0; i < nboxes; ++i) {
+            const int32_t* b = bounds6 + 6 * i;
+            bl.push_back(amrex::Box(amrex::IntVect(b[0], b[1], b[2]),
+                                    amrex::IntVect(b[3], b[4], b[5])));
+        }
+        return JlBoxArray(amrex::BoxArray(std::move(bl)));
+    });
 
     // JlDistributionMapping
     mod.add_type<JlDistributionMapping>("JlDistributionMapping")
@@ -1583,6 +1747,23 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .constructor<const JlBoxArray&>()
         .method("size", &JlDistributionMapping::size)
         .method("get_rank", &JlDistributionMapping::get_rank);
+
+    mod.method("make_knapsack_dmap_raw", [](const double* costs, int64_t nboxes) {
+        amrex::Vector<amrex::Real> rcost(static_cast<std::size_t>(nboxes));
+        for (int64_t i = 0; i < nboxes; ++i) {
+            rcost[i] = static_cast<amrex::Real>(costs[i]);
+        }
+        return JlDistributionMapping(amrex::DistributionMapping::makeKnapSack(rcost));
+    });
+
+    mod.method("make_sfc_dmap_raw", [](const double* costs, int64_t nboxes,
+                                       const JlBoxArray& ba, bool sort) {
+        amrex::Vector<amrex::Real> rcost(static_cast<std::size_t>(nboxes));
+        for (int64_t i = 0; i < nboxes; ++i) {
+            rcost[i] = static_cast<amrex::Real>(costs[i]);
+        }
+        return JlDistributionMapping(amrex::DistributionMapping::makeSFC(rcost, ba.ba, sort));
+    });
 
     // JlMultiFab
     mod.add_type<JlMultiFab>("JlMultiFab")
@@ -1602,8 +1783,15 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("add_from!", &JlMultiFab::add_from)
         .method("copy_from!", &JlMultiFab::copy_from)
         .method("parallel_copy_from!", &JlMultiFab::parallel_copy_from)
+        .method("parallel_copy_from_aniso!", &JlMultiFab::parallel_copy_from_aniso)
+        .method("saxpy_from!", &JlMultiFab::saxpy_from)
+        .method("lincomb_from!", &JlMultiFab::lincomb_from)
+        .method("dot_with", &JlMultiFab::dot_with)
         .method("fill_boundary!", &JlMultiFab::fill_boundary)
         .method("fill_boundary_comp!", &JlMultiFab::fill_boundary_comp)
+        .method("fill_boundary_nowait!", &JlMultiFab::fill_boundary_nowait)
+        .method("fill_boundary_comp_nowait!", &JlMultiFab::fill_boundary_comp_nowait)
+        .method("fill_boundary_finish!", &JlMultiFab::fill_boundary_finish)
         .method("sum_boundary!", &JlMultiFab::sum_boundary)
         .method("sum_boundary_comp!", &JlMultiFab::sum_boundary_comp)
         .method("min_val", &JlMultiFab::min_val)
@@ -1626,6 +1814,8 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("dmap", &JliMultiFab::dmap)
         .method("set_val!", &JliMultiFab::set_val)
         .method("copy_from!", &JliMultiFab::copy_from)
+        .method("parallel_copy_from!", &JliMultiFab::parallel_copy_from)
+        .method("parallel_copy_from_aniso!", &JliMultiFab::parallel_copy_from_aniso)
         .method("fill_boundary!", &JliMultiFab::fill_boundary)
         .method("sum_boundary!", &JliMultiFab::sum_boundary)
         .method("min_val", &JliMultiFab::min_val)
@@ -1670,12 +1860,18 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("tfab_hi", &JlMFIter::tfab_hi)
         .method("data_ptr", &JlMFIter::data_ptr)
         .method("idata_ptr", &JlMFIter::idata_ptr)
-        .method("tdata_ptr", &JlMFIter::tdata_ptr);
+        .method("tdata_ptr", &JlMFIter::tdata_ptr)
+        .method("fab_info!", &JlMFIter::fab_info)
+        .method("ifab_info!", &JlMFIter::ifab_info)
+        .method("tfab_info!", &JlMFIter::tfab_info);
 
     // JlAmrCore
     mod.add_type<JlAmrCore>("JlAmrCore")
         .constructor<const JlRealBox&, int, int, int, int, int,
                      bool, bool, bool, int, int, int, int, int, int, double>()
+        .constructor<const JlRealBox&, int, int, int, int, int,
+                     bool, bool, bool, int, int, int, int, int, int, double,
+                     int, int, int, int>()
         .method("add_refine_box!", &JlAmrCore::add_refine_box)
         .method("clear_refine_boxes!", &JlAmrCore::clear_refine_boxes)
         .method("set_tag_mask!", &JlAmrCore::set_tag_mask)
@@ -1821,6 +2017,68 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
                                   scomp, dcomp, ncomp, cgeom.geom, fgeom.geom,
                                   cphysbc, 0, fphysbc, 0,
                                   amrex::IntVect(rx, ry, rz), mapper, bcs, 0);
+    });
+
+    mod.method("fill_patch_two_levels_time!", [](JlMultiFab& dst, double time,
+                                                 JlMultiFab& cmf_old, double t_old,
+                                                 JlMultiFab& cmf_new, double t_new,
+                                                 JlMultiFab& fmf, double ft,
+                                                 int scomp, int dcomp, int ncomp,
+                                                 const JlGeometry& cgeom, const JlGeometry& fgeom,
+                                                 int rx, int ry, int rz, int interp_type) {
+        PhysBCFunctNoOpFab<amrex::FArrayBox> cphysbc, fphysbc;
+        amrex::Vector<amrex::MultiFab*> cmf_vec{cmf_old.mf.get(), cmf_new.mf.get()};
+        amrex::Vector<amrex::Real> ct{t_old, t_new};
+        amrex::Vector<amrex::MultiFab*> fmf_vec{fmf.mf.get()};
+        amrex::Vector<amrex::Real> ft_vec{ft};
+        int lo_bc[3] = {amrex::BCType::int_dir, amrex::BCType::int_dir, amrex::BCType::int_dir};
+        int hi_bc[3] = {amrex::BCType::int_dir, amrex::BCType::int_dir, amrex::BCType::int_dir};
+        amrex::Vector<amrex::BCRec> bcs(ncomp, amrex::BCRec(lo_bc, hi_bc));
+        amrex::Interpolater* mapper = get_interpolater(interp_type);
+        amrex::FillPatchTwoLevels(*dst.mf, time, cmf_vec, ct, fmf_vec, ft_vec,
+                                  scomp, dcomp, ncomp, cgeom.geom, fgeom.geom,
+                                  cphysbc, 0, fphysbc, 0,
+                                  amrex::IntVect(rx, ry, rz), mapper, bcs, 0);
+    });
+
+    mod.method("fill_patch_two_levels_time_bc!", [](JlMultiFab& dst, double time,
+                                                    JlMultiFab& cmf_old, double t_old,
+                                                    JlMultiFab& cmf_new, double t_new,
+                                                    JlMultiFab& fmf, double ft,
+                                                    int scomp, int dcomp, int ncomp,
+                                                    const JlGeometry& cgeom, const JlGeometry& fgeom,
+                                                    int rx, int ry, int rz, int interp_type,
+                                                    const JlBCRec& bc,
+                                                    double vlo_x, double vlo_y, double vlo_z,
+                                                    double vhi_x, double vhi_y, double vhi_z) {
+        amrex::Vector<amrex::BCRec> bcs(ncomp, bc.bcr);
+        ExtDirFillOp op{{vlo_x, vlo_y, vlo_z}, {vhi_x, vhi_y, vhi_z}};
+        amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExtDirFillOp>> cphysbc(
+            cgeom.geom, bcs, amrex::GpuBndryFuncFab<ExtDirFillOp>(op));
+        amrex::PhysBCFunct<amrex::GpuBndryFuncFab<ExtDirFillOp>> fphysbc(
+            fgeom.geom, bcs, amrex::GpuBndryFuncFab<ExtDirFillOp>(op));
+        amrex::Vector<amrex::MultiFab*> cmf_vec{cmf_old.mf.get(), cmf_new.mf.get()};
+        amrex::Vector<amrex::Real> ct{t_old, t_new};
+        amrex::Vector<amrex::MultiFab*> fmf_vec{fmf.mf.get()};
+        amrex::Vector<amrex::Real> ft_vec{ft};
+        amrex::Interpolater* mapper = get_interpolater(interp_type);
+        amrex::FillPatchTwoLevels(*dst.mf, time, cmf_vec, ct, fmf_vec, ft_vec,
+                                  scomp, dcomp, ncomp, cgeom.geom, fgeom.geom,
+                                  cphysbc, 0, fphysbc, 0,
+                                  amrex::IntVect(rx, ry, rz), mapper, bcs, 0);
+    });
+
+    mod.method("define_fine_mask!", [](JliMultiFab& out,
+                                       const JlBoxArray& cba, const JlDistributionMapping& cdm,
+                                       int ngx, int ngy, int ngz,
+                                       const JlBoxArray& fba,
+                                       int rx, int ry, int rz,
+                                       const JlGeometry& cgeom,
+                                       int crse_val, int fine_val) {
+        out.imf = std::make_unique<amrex::iMultiFab>(
+            amrex::makeFineMask(cba.ba, cdm.dm, amrex::IntVect(ngx, ngy, ngz),
+                                fba.ba, amrex::IntVect(rx, ry, rz),
+                                cgeom.geom.periodicity(), crse_val, fine_val));
     });
 
     mod.method("average_down!", [](const JlMultiFab& fine, JlMultiFab& coarse,

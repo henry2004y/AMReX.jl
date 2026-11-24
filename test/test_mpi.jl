@@ -91,6 +91,105 @@ try
         @test min_val(mf_alt, 0, 0) ≈ 10.0
         @test max_val(mf_alt, 0, 0) ≈ 20.0
 
+        # Non-blocking fill_boundary_nowait! + fill_boundary_finish! across 2 ranks
+        mf_nb = MultiFab(ba, dm, 1, 1)
+        set_val!(mf_nb, 0.0)
+        each_fab(mf_nb) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            for k in rz, j in ry, i in rx
+                arr[i, j, k, 1] = my_val
+            end
+        end
+        fill_boundary_nowait!(mf_nb, geom_per)
+        fill_boundary_finish!(mf_nb)
+        each_fab(mf_nb) do _, vbx, arr
+            rx, _, _ = bounds(vbx)
+            if first(rx) == 0
+                @test arr[8, 0, 0, 1] ≈ other_val
+            else
+                @test arr[7, 0, 0, 1] ≈ other_val
+            end
+        end
+
+        # Native MPI-global MultiFab dot product
+        @test dot_mf(mf, mf; comp1 = 0, comp2 = 0, ncomp = 1, nghost = 0) ≈ (10.0^2 + 20.0^2) * 512.0
+
+        # 3b. 2-Rank Multi-Level AMR: make_fine_mask, coarsened_multifab + parallel_copy!,
+        #     weighted DistributionMapping, and time-interpolated fill_patch_two_levels!
+        rb_amr = RealBox(0.0, 0.0, 0.0, 16.0, 16.0, 1.0)
+        amr_ml = AmrCore(
+            rb_amr, (16, 16, 1); max_level = 1,
+            max_grid_size = (8, 8, 1), blocking_factor = (4, 4, 1)
+        )
+        add_tag_box!(amr_ml, 4.0, 4.0, 0.0, 12.0, 12.0, 1.0)
+        init_from_scratch!(amr_ml, 0.0)
+        @test finest_level(amr_ml) == 1
+
+        g0_ml = geom(amr_ml, Int32(0)); g1_ml = geom(amr_ml, Int32(1))
+        ba0_ml = box_array(amr_ml, Int32(0)); dm0_ml = dmap(amr_ml, Int32(0))
+        ba1_ml = box_array(amr_ml, Int32(1)); dm1_ml = dmap(amr_ml, Int32(1))
+        rr_ml = ref_ratio_tuple(amr_ml, 0)
+
+        fmask = make_fine_mask(amr_ml, 0; crse_val = 0, fine_val = 1)
+        @test min_val(fmask, Int32(0), Int32(0)) == 0
+        @test max_val(fmask, Int32(0), Int32(0)) == 1
+
+        # MPI-safe coarse -> fine staging via coarsened_multifab + parallel_copy!
+        mf_c0 = MultiFab(ba0_ml, dm0_ml, 1, 1)
+        each_fab(mf_c0) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            for k in rz, j in ry, i in rx
+                arr[i, j, k, 1] = Float64(100 * i + j)
+            end
+        end
+        fill_boundary!(mf_c0, g0_ml)
+
+        mf_stage_c = coarsened_multifab(amr_ml, 1, 1, (1, 1, 0))
+        set_val!(mf_stage_c, -1.0)
+        parallel_copy!(mf_stage_c, mf_c0, g0_ml; snghost = (1, 1, 0), dnghost = (1, 1, 0))
+        each_fab(mf_stage_c) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            for k in rz, j in ry, i in rx
+                @test arr[i, j, k, 1] ≈ Float64(100 * i + j)
+            end
+        end
+
+        # MPI-safe fine -> coarse staging via coarsened_multifab + parallel_copy!
+        set_val!(mf_stage_c, 77.0)
+        parallel_copy!(mf_c0, mf_stage_c, g0_ml; snghost = 0, dnghost = 0)
+        each_fab(mf_c0) do mfi, vbx, arr
+            m_arr = iarray4(fmask, mfi)
+            rx, ry, rz = bounds(vbx)
+            for k in rz, j in ry, i in rx
+                if m_arr[i, j, k, 1] == 1
+                    @test arr[i, j, k, 1] ≈ 77.0
+                else
+                    @test arr[i, j, k, 1] ≈ Float64(100 * i + j)
+                end
+            end
+        end
+
+        # Weighted Knapsack & SFC DistributionMapping across 2 ranks
+        nboxes0 = Int(AMReX.size(ba0_ml))
+        costs0 = [Float64(b) for b in 1:nboxes0]
+        dm_ks = make_knapsack_dmap(costs0)
+        dm_sfc = make_sfc_dmap(costs0, ba0_ml)
+        @test Int(AMReX.size(dm_ks)) == nboxes0
+        @test Int(AMReX.size(dm_sfc)) == nboxes0
+        @test Set([Int(get_rank(dm_ks, b - 1)) for b in 1:nboxes0]) == Set([0, 1])
+
+        # Time-interpolated fill_patch_two_levels! across 2 ranks
+        cmf_t0 = MultiFab(ba0_ml, dm0_ml, 1, 1); set_val!(cmf_t0, 4.0)
+        cmf_t1 = MultiFab(ba0_ml, dm0_ml, 1, 1); set_val!(cmf_t1, 8.0)
+        fmf_t  = MultiFab(ba1_ml, dm1_ml, 1, 1); set_val!(fmf_t, 6.0)
+        dst_t  = MultiFab(ba1_ml, dm1_ml, 1, 1); set_val!(dst_t, 0.0)
+        fill_patch_two_levels!(
+            dst_t, 0.5, cmf_t0, 0.0, cmf_t1, 1.0, fmf_t, 0.5,
+            0, 0, 1, g0_ml, g1_ml, rr_ml, CellConservativeLinear
+        )
+        @test min_val(dst_t, 0, 1) ≈ 6.0
+        @test max_val(dst_t, 0, 1) ≈ 6.0
+
         # 4. Cross-Rank ParticleContainer redistribute! (particles migrating between Rank 0 and Rank 1)
         amr = AmrCore(
             rb, (16, 8, 8); max_level = 0, is_periodic = (true, true, true),
@@ -98,8 +197,9 @@ try
         )
         init_from_scratch!(amr, 0.0)
         pc = ParticleContainer(amr; n_real = 2, n_int = 1)
+        mf_pc = MultiFab(box_array(amr, Int32(0)), dmap(amr, Int32(0)), 1, 0)
 
-        each_fab(mf) do mfi, vbx, _
+        each_fab(mf_pc) do mfi, vbx, _
             gid = index(mfi)
             tid = local_tile_index(mfi)
             rx, _, _ = bounds(vbx)

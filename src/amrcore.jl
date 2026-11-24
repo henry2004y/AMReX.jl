@@ -133,12 +133,13 @@ Return a zero-copy 4D `OffsetArray{Int8, 4}` view `(i, j, k, 1)` over the local 
 Assign `Int8(TagSet)` (or `Int8(2)`) to mark cells for refinement and `Int8(TagClear)` (`0`) to clear.
 """
 @inline function tag_array4(tb::JlTagBoxArray, mfi::JlMFIter)
-    rx = Int(tfab_lo(mfi, tb, Int32(0))):Int(tfab_hi(mfi, tb, Int32(0)))
-    ry = Int(tfab_lo(mfi, tb, Int32(1))):Int(tfab_hi(mfi, tb, Int32(1)))
-    rz = Int(tfab_lo(mfi, tb, Int32(2))):Int(tfab_hi(mfi, tb, Int32(2)))
-    nx, ny, nz = length(rx), length(ry), length(rz)
-    ptr = tdata_ptr(mfi, tb).cpp_object
-    raw = unsafe_wrap(Array, ptr, (nx, ny, nz, 1); own = false)
+    info = Ref{NTuple{6, Int32}}()
+    ptr = GC.@preserve info tfab_info!(mfi, tb, Base.unsafe_convert(Ptr{Int32}, info)).cpp_object
+    lo0, lo1, lo2, hi0, hi1, hi2 = info[]
+    rx = Int(lo0):Int(hi0)
+    ry = Int(lo1):Int(hi1)
+    rz = Int(lo2):Int(hi2)
+    raw = unsafe_wrap(Array, ptr, (length(rx), length(ry), length(rz), 1); own = false)
     return OffsetArray(raw, rx, ry, rz, 1:1)
 end
 
@@ -416,16 +417,150 @@ function fill_patch_two_levels!(
 end
 
 """
+    fill_patch_two_levels!(dst::JlMultiFab, time::Real,
+                           cmf_old::JlMultiFab, t_old::Real,
+                           cmf_new::JlMultiFab, t_new::Real,
+                           fmf::JlMultiFab, ft::Real,
+                           scomp::Integer, dcomp::Integer, ncomp::Integer,
+                           cgeom::JlGeometry, fgeom::JlGeometry,
+                           ref_ratio::NTuple{3, Integer},
+                           interp::InterpType=CellConservativeLinear;
+                           bc::Union{Nothing, JlBCRec}=nothing,
+                           val_lo::NTuple{3, Real}=(0.0, 0.0, 0.0),
+                           val_hi::NTuple{3, Real}=(0.0, 0.0, 0.0))
+
+Fill `dst` on the fine level at `time ∈ [t_old, t_new]` by linearly interpolating in time
+between `cmf_old` (at `t_old`) and `cmf_new` (at `t_new`) on coarse–fine boundaries and copying
+from `fmf` (at `ft`), enabling Berger–Colella temporal subcycling.
+"""
+function fill_patch_two_levels!(
+        dst::JlMultiFab, time::Real,
+        cmf_old::JlMultiFab, t_old::Real,
+        cmf_new::JlMultiFab, t_new::Real,
+        fmf::JlMultiFab, ft::Real,
+        scomp::Integer, dcomp::Integer, ncomp::Integer,
+        cgeom::JlGeometry, fgeom::JlGeometry,
+        ref_ratio::NTuple{3, Integer},
+        interp::InterpType = CellConservativeLinear;
+        bc::Union{Nothing, JlBCRec} = nothing,
+        val_lo::NTuple{3, Real} = (0.0, 0.0, 0.0),
+        val_hi::NTuple{3, Real} = (0.0, 0.0, 0.0)
+    )
+    rx, ry, rz = Int32.(ref_ratio)
+    if bc === nothing
+        fill_patch_two_levels_time!(
+            dst, Float64(time),
+            cmf_old, Float64(t_old), cmf_new, Float64(t_new),
+            fmf, Float64(ft),
+            Int32(scomp), Int32(dcomp), Int32(ncomp),
+            cgeom, fgeom, rx, ry, rz, Int32(interp)
+        )
+    else
+        fill_patch_two_levels_time_bc!(
+            dst, Float64(time),
+            cmf_old, Float64(t_old), cmf_new, Float64(t_new),
+            fmf, Float64(ft),
+            Int32(scomp), Int32(dcomp), Int32(ncomp),
+            cgeom, fgeom, rx, ry, rz, Int32(interp), bc,
+            Float64(val_lo[1]), Float64(val_lo[2]), Float64(val_lo[3]),
+            Float64(val_hi[1]), Float64(val_hi[2]), Float64(val_hi[3])
+        )
+    end
+    return dst
+end
+
+"""
+    make_fine_mask(cba::JlBoxArray, cdm::JlDistributionMapping,
+                   fba::JlBoxArray, ref_ratio::NTuple{3, Integer},
+                   cgeom::JlGeometry;
+                   crse_val::Integer=0, fine_val::Integer=1,
+                   nghost::Union{Integer, NTuple{3, Integer}}=0) -> JliMultiFabAllocated
+    make_fine_mask(amr::JlAmrCore, crse_lev::Integer;
+                   crse_val::Integer=0, fine_val::Integer=1,
+                   nghost::Union{Integer, NTuple{3, Integer}}=0) -> JliMultiFabAllocated
+
+Build an MPI-safe `iMultiFab` on the coarse level marking cells covered by `fba` with `fine_val`
+and uncovered coarse cells with `crse_val` (via `amrex::makeFineMask`).
+"""
+function make_fine_mask(
+        cba::JlBoxArray, cdm::JlDistributionMapping,
+        fba::JlBoxArray, ref_ratio::NTuple{3, Integer},
+        cgeom::JlGeometry;
+        crse_val::Integer = 0, fine_val::Integer = 1,
+        nghost::Union{Integer, NTuple{3, Integer}} = 0
+    )
+    ng = nghost isa Integer ? (nghost, nghost, nghost) : nghost
+    out = JliMultiFab()
+    define_fine_mask!(
+        out, cba, cdm,
+        Int32(ng[1]), Int32(ng[2]), Int32(ng[3]),
+        fba, Int32(ref_ratio[1]), Int32(ref_ratio[2]), Int32(ref_ratio[3]),
+        cgeom, Int32(crse_val), Int32(fine_val)
+    )
+    return out
+end
+
+function make_fine_mask(
+        amr::JlAmrCore, crse_lev::Integer;
+        crse_val::Integer = 0, fine_val::Integer = 1,
+        nghost::Union{Integer, NTuple{3, Integer}} = 0
+    )
+    clev = Int32(crse_lev)
+    flev = Int32(crse_lev + 1)
+    return make_fine_mask(
+        box_array(amr, clev), dmap(amr, clev),
+        box_array(amr, flev), ref_ratio_tuple(amr, crse_lev),
+        geom(amr, clev);
+        crse_val = crse_val, fine_val = fine_val, nghost = nghost
+    )
+end
+
+"""
+    coarsened_multifab(fba::JlBoxArray, fdm::JlDistributionMapping,
+                       ref_ratio::NTuple{3, Integer},
+                       ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}}=0) -> JlMultiFabAllocated
+    coarsened_multifab(amr::JlAmrCore, fine_lev::Integer,
+                       ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}}=0) -> JlMultiFabAllocated
+
+Allocate a `MultiFab` on `coarsen(fba, ref_ratio)` sharing `fdm` (the fine level's
+`DistributionMapping`). Pair with `parallel_copy!` for zero-Dict, MPI-safe custom
+coarse–fine prolongation, mortar filling, and conservative restriction.
+"""
+function coarsened_multifab(
+        fba::JlBoxArray, fdm::JlDistributionMapping,
+        ref_ratio::NTuple{3, Integer},
+        ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0
+    )
+    cba_on_fine = coarsen(fba, ref_ratio)
+    return MultiFab(cba_on_fine, fdm, ncomp, nghost)
+end
+
+function coarsened_multifab(
+        amr::JlAmrCore, fine_lev::Integer,
+        ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0
+    )
+    flev = Int32(fine_lev)
+    clev = Int(fine_lev) - 1
+    return coarsened_multifab(
+        box_array(amr, flev), dmap(amr, flev),
+        ref_ratio_tuple(amr, clev), ncomp, nghost
+    )
+end
+
+"""
     AmrCore(rbox::JlRealBox, ncells::NTuple{3, Integer};
             max_level::Integer=0,
             coord::Integer=0,
             is_periodic::NTuple{3, Bool}=(true, true, true),
             max_grid_size::NTuple{3, Integer}=(32, 32, 32),
             blocking_factor::NTuple{3, Integer}=(4, 4, 4),
-            grid_eff::Real=0.7)
+            grid_eff::Real=0.7,
+            ref_ratio::Union{Integer, NTuple{3, Integer}}=(2, 2, 2),
+            n_error_buf::Integer=1)
 
 Construct an AMReX `JlAmrCore` multi-level mesh hierarchy manager.
-Automatically sets the z-direction blocking factor to 1 when `ncells[3] == 1` (Fake-1D/2D).
+Automatically sets the y/z blocking factor and refinement ratio to 1 when `ncells[2] == 1`
+or `ncells[3] == 1` (Fake-1D/2D).
 """
 function AmrCore(
         rbox::JlRealBox, ncells::NTuple{3, Integer};
@@ -434,18 +569,25 @@ function AmrCore(
         is_periodic::NTuple{3, Bool} = (true, true, true),
         max_grid_size::NTuple{3, Integer} = (32, 32, 32),
         blocking_factor::NTuple{3, Integer} = (4, 4, 4),
-        grid_eff::Real = 0.7
+        grid_eff::Real = 0.7,
+        ref_ratio::Union{Integer, NTuple{3, Integer}} = (2, 2, 2),
+        n_error_buf::Integer = 1
     )
     nx, ny, nz = Int32.(ncells)
     mgx, mgy, mgz = Int32.(max_grid_size)
     bx = Int32(min(blocking_factor[1], ncells[1]))
-    by = Int32(min(blocking_factor[2], ncells[2]))
+    by = Int32(ncells[2] == 1 ? 1 : min(blocking_factor[2], ncells[2]))
     bz = Int32(ncells[3] == 1 ? 1 : min(blocking_factor[3], ncells[3]))
+    rr = ref_ratio isa Integer ? (ref_ratio, ref_ratio, ref_ratio) : ref_ratio
+    rrx = Int32(rr[1])
+    rry = Int32(ncells[2] == 1 ? 1 : rr[2])
+    rrz = Int32(ncells[3] == 1 ? 1 : rr[3])
     return JlAmrCore(
         rbox, Int32(max_level),
         nx, ny, nz, Int32(coord),
         is_periodic[1], is_periodic[2], is_periodic[3],
-        mgx, mgy, mgz, bx, by, bz, Float64(grid_eff)
+        mgx, mgy, mgz, bx, by, bz, Float64(grid_eff),
+        rrx, rry, rrz, Int32(n_error_buf)
     )
 end
 
