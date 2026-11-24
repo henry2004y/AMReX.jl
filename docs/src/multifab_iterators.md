@@ -44,10 +44,12 @@ each_fab(mf_dst) do mfi, vbx, dst
 end
 ```
 
-## Ghost-Cell Synchronization
+## Ghost-Cell Synchronization & Parallel Copy
 
 - **`fill_boundary!(mf, geom)`**: Exchanges interior valid values into ghost layers of neighboring boxes and across periodic domain boundaries. For nodal `MultiFab`s, shared boundary nodes are synchronized consistently.
+- **`fill_boundary_nowait!(mf, geom)` / `fill_boundary_finish!(mf)`**: Non-blocking MPI halo exchange to overlap communication with interior computation.
 - **`sum_boundary!(mf, geom)`**: Accumulates values deposited into ghost cells/nodes (e.g., PIC charge and current density deposition) back into the owning valid cells/nodes.
+- **`parallel_copy!(dst, src, geom; scomp, dcomp, ncomp, snghost, dnghost)`**: MPI-safe copy across arbitrary `BoxArray` and `DistributionMapping` layouts (supporting isotropic or anisotropic ghost tuples on both `MultiFab` and `iMultiFab`).
 
 ```julia
 # After particle-to-grid deposition into ghost nodes:
@@ -57,7 +59,7 @@ fill_boundary!(J_node, geom)
 
 ## Built-in Linear Algebra & Reductions
 
-`AMReX.jl` exposes both C++ AMReX reductions and allocation-free linear combinations:
+`AMReX.jl` exposes native C++ AMReX reductions and linear combinations:
 
 | Operation | Description |
 | :--- | :--- |
@@ -65,8 +67,9 @@ fill_boundary!(J_node, geom)
 | `scale!(mf, a)` | In-place scaling `mf *= a` |
 | `copy!(dst, src, sc, dc, nc, ng)` | Local FAB-to-FAB component copy |
 | `plus!(dst, src, sc, dc, nc, ng)` | Local FAB-to-FAB component addition |
-| `saxpy!(dst, a, src, sc, dc, nc, ng)` | In-place `dst += a * src` |
-| `lincomb!(dst, a, x, xc, b, y, yc, dc, nc, ng)` | In-place `dst = a * x + b * y` |
+| `saxpy!(dst, a, src, sc, dc, nc, ng)` | Native C++ in-place `dst += a * src` |
+| `lincomb!(dst, a, x, xc, b, y, yc, dc, nc, ng)` | Native C++ in-place `dst = a * x + b * y` |
+| `dot_mf(x, y; comp1, comp2, ncomp, nghost, local_only)` | Native C++ MPI-global inner product (`amrex::MultiFab::Dot`) |
 | `min_val(mf, comp)`, `max_val(mf, comp)` | Global min/max of 0-based component `comp` |
 | `norm0(mf, comp)`, `norm1(mf, comp)`, `norm2(mf, comp)` | $L_\infty$, $L_1$, and $L_2$ norms |
 | `sum_val(mf, comp)` | Global sum over valid domain |

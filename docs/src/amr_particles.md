@@ -10,7 +10,9 @@ amr = AmrCore(rbox, (32, 32, 1);
               max_level=1,
               is_periodic=(true, true, true),
               max_grid_size=(16, 16, 1),
-              blocking_factor=(4, 4, 1))
+              blocking_factor=(4, 4, 1),
+              ref_ratio=(2, 2, 1),
+              n_error_buf=1)
 
 # Tag a physical region [2.5, 7.5] x [2.5, 7.5] for refinement to level 1
 add_tag_box!(amr, 2.5, 2.5, 0.0, 7.5, 7.5, 1.0; lev=0)
@@ -19,11 +21,20 @@ init_from_scratch!(amr, 0.0)
 @assert finest_level(amr) == 1
 ```
 
+Dummy axes (`ny == 1` or `nz == 1`) are automatically clamped to `ref_ratio = 1` and `blocking_factor = 1` (e.g. `(2, 1, 1)` for 1D grids).
+
+### AMR Geometry, Masking & Weighted Load Balancing
+
+- **`Box` & `BoxArray` geometry ops**: `coarsen`, `refine`, anisotropic `grow`, `shift`, `intersects`, `coarsenable`, `num_pts`, directional `surrounding_nodes(bx, dir)` / `enclosed_cells(bx, dir)`, and `BoxArray(boxes::Vector{<:JlBox})`.
+- **`make_fine_mask(amr, crse_lev; crse_val=0, fine_val=1, nghost=0)`**: Builds an MPI-safe `iMultiFab` marking coarse cells covered by the next finer level (`amrex::makeFineMask`).
+- **`coarsened_multifab(amr, fine_lev, ncomp, nghost)`**: Allocates a staging `MultiFab` on `coarsen(fba, ref_ratio)` sharing the fine level's `DistributionMapping`; pair with `parallel_copy!` for zero-`Dict`, MPI-safe custom coarse–fine operators (such as high-order DG prolongation/restriction).
+- **`make_knapsack_dmap(costs)` & `make_sfc_dmap(costs, ba)`**: Build weighted dynamic load-balanced `DistributionMapping`s via AMReX's Knapsack and Space-Filling Curve algorithms.
+
 ### Coarse-Fine Field Synchronization
 
 `AMReX.jl` wraps AMReX's multi-level prolongation and restriction operators:
 
-- **`fill_patch_two_levels!`**: Fills a fine-level `MultiFab` (including its coarse-fine ghost boundary) by interpolating from the coarse level (`CellConservativeLinear`, `NodeBilinear`, `PiecewiseConstant`, or `CellQuadratic`) and copying from same-level boxes.
+- **`fill_patch_two_levels!`**: Fills a fine-level `MultiFab` (including its coarse-fine ghost boundary) by interpolating from the coarse level (`CellConservativeLinear`, `NodeBilinear`, `PiecewiseConstant`, or `CellQuadratic`) and copying from same-level boxes. Also provides a time-interpolated overload accepting `(cmf_old, t_old, cmf_new, t_new)` for Berger–Colella temporal subcycling.
 - **`average_down!`** / **`average_down_nodal!`**: Restricts fine-level cell-centered or nodal fields onto the underlying coarse level.
 - **`sum_fine_to_coarse_nodal!`**: Accumulates nodal fine-level quantities (such as deposited moments or currents) onto shared coarse nodes.
 
