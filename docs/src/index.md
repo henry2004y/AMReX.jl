@@ -28,7 +28,7 @@ features:
 
 # Overview
 
-**AMReX.jl** provides an ergonomic, zero-overhead Julia interface to the [AMReX](https://amrex-codes.github.io/amrex/) C++ framework for block-structured Adaptive Mesh Refinement (AMR). It is designed as the foundational mesh and particle layer for kinetic plasma and fluid solvers such as **FLEKS.jl**.
+**AMReX.jl** provides an ergonomic, zero-overhead Julia interface to the [AMReX](https://amrex-codes.github.io/amrex/) C++ framework for block-structured Adaptive Mesh Refinement (AMR). It is designed as the foundational mesh and particle layer for the **LingXiaoPlasma** solver suite (`LingXiaoPIC.jl`, `LingXiaoFluid.jl`, `LingXiaoBoltzX.jl`, and `LingXiaoHermite.jl`).
 
 ## Quick Example
 
