@@ -1,6 +1,58 @@
 # ============================================================================
-# Box, RealBox, Geometry, BoxArray, DistributionMapping high-level API
+# Box, IndexBox, RealBox, Geometry, BoxArray, DistributionMapping high-level API
 # ============================================================================
+
+struct _CBoxBounds
+    lo0::Int32
+    lo1::Int32
+    lo2::Int32
+    hi0::Int32
+    hi1::Int32
+    hi2::Int32
+end
+
+struct _CBoxInfo
+    lo0::Int32
+    lo1::Int32
+    lo2::Int32
+    hi0::Int32
+    hi1::Int32
+    hi2::Int32
+    nodal0::UInt8
+    nodal1::UInt8
+    nodal2::UInt8
+    _pad::UInt8
+end
+
+"""
+    IndexBox
+
+Zero-allocation `isbits` 3D inclusive index box `(lo[1]:hi[1], lo[2]:hi[2], lo[3]:hi[3])`
+returned by `valid_box`, `tile_box`, `fab_box`, and `each_fab` without CxxWrap finalizers.
+"""
+struct IndexBox
+    lo::NTuple{3, Int}
+    hi::NTuple{3, Int}
+    nodal::NTuple{3, Bool}
+end
+
+@inline function IndexBox(c::_CBoxInfo)
+    return IndexBox(
+        (Int(c.lo0), Int(c.lo1), Int(c.lo2)),
+        (Int(c.hi0), Int(c.hi1), Int(c.hi2)),
+        (c.nodal0 != 0, c.nodal1 != 0, c.nodal2 != 0),
+    )
+end
+
+@inline bounds(bx::IndexBox) = (bx.lo[1]:bx.hi[1], bx.lo[2]:bx.hi[2], bx.lo[3]:bx.hi[3])
+@inline lo(bx::IndexBox, dir::Integer) = Int32(bx.lo[dir + 1])
+@inline hi(bx::IndexBox, dir::Integer) = Int32(bx.hi[dir + 1])
+@inline length(bx::IndexBox, dir::Integer) = max(0, bx.hi[dir + 1] - bx.lo[dir + 1] + 1)
+@inline is_nodal(bx::IndexBox, dir::Integer) = bx.nodal[dir + 1]
+@inline num_pts(bx::IndexBox) = Int64(length(bx, 0)) * Int64(length(bx, 1)) * Int64(length(bx, 2))
+@inline is_empty(bx::IndexBox) = (bx.hi[1] < bx.lo[1]) || (bx.hi[2] < bx.lo[2]) || (bx.hi[3] < bx.lo[3])
+@inline contains(bx::IndexBox, i::Integer, j::Integer, k::Integer) =
+    (bx.lo[1] <= i <= bx.hi[1]) && (bx.lo[2] <= j <= bx.hi[2]) && (bx.lo[3] <= k <= bx.hi[3])
 
 """
     Box(lox, loy, loz, hix, hiy, hiz; nodal=(false, false, false))
@@ -20,18 +72,16 @@ function Box(
 end
 
 """
-    bounds(bx::JlBox) -> ((lox, hix), (loy, hiy), (loz, hiz))
+    bounds(bx::Union{JlBox, IndexBox}) -> (UnitRange{Int}, UnitRange{Int}, UnitRange{Int})
 
-Return the inclusive index ranges `(lox:hix, loy:hiy, loz:hiz)` of `bx`.
+Return the inclusive index ranges `(lox:hix, loy:hiy, loz:hiz)` of `bx` with zero heap allocations.
 """
 @inline function bounds(bx::JlBox)
-    buf = Ref{NTuple{6, Int32}}()
-    GC.@preserve buf fill_bounds!(bx, Base.unsafe_convert(Ptr{Int32}, buf))
-    lo0, lo1, lo2, hi0, hi1, hi2 = buf[]
+    b = @ccall $(_FN_BOX_BOUNDS[])(bx.cpp_object::Ptr{Cvoid})::_CBoxBounds
     return (
-        Int(lo0):Int(hi0),
-        Int(lo1):Int(hi1),
-        Int(lo2):Int(hi2),
+        Int(b.lo0):Int(b.hi0),
+        Int(b.lo1):Int(b.hi1),
+        Int(b.lo2):Int(b.hi2),
     )
 end
 
@@ -230,16 +280,16 @@ end
 function BoxArray(boxes::AbstractVector{<:JlBox})
     n = length(boxes)
     buf = Vector{Int32}(undef, 6 * n)
-    tmp = Ref{NTuple{6, Int32}}()
-    GC.@preserve tmp begin
-        ptr = Base.unsafe_convert(Ptr{Int32}, tmp)
-        for (idx, bx) in enumerate(boxes)
-            fill_bounds!(bx, ptr)
-            b = tmp[]
-            base = 6 * (idx - 1)
-            @inbounds for d in 1:6
-                buf[base + d] = b[d]
-            end
+    for (idx, bx) in enumerate(boxes)
+        b = @ccall $(_FN_BOX_BOUNDS[])(bx.cpp_object::Ptr{Cvoid})::_CBoxBounds
+        base = 6 * (idx - 1)
+        @inbounds begin
+            buf[base + 1] = b.lo0
+            buf[base + 2] = b.lo1
+            buf[base + 3] = b.lo2
+            buf[base + 4] = b.hi0
+            buf[base + 5] = b.hi1
+            buf[base + 6] = b.hi2
         end
     end
     return GC.@preserve buf make_box_array_from_bounds(pointer(buf), Int64(n))

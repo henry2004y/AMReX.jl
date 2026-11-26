@@ -314,6 +314,29 @@ try
             pc2 = ParticleContainer(amr; n_real = 2, n_int = 1)
             restart!(pc2, chk_dir, "particles")
             @test total_number_of_particles(pc2; only_valid = true, local_only = false) == 20
+
+            # 7. ABI-Portable MPI Point-to-Point & Collective Primitives
+            reqs = MPIRequestBuffer(2)
+            ensure_requests!(reqs, 4)
+            peer = 1 - myproc
+            send_explicit = Float64[100.0 * (myproc + 1), 200.0 * (myproc + 1)]
+            recv_explicit = zeros(Float64, 2)
+            parallel_irecv!(recv_explicit, peer, 701, reqs, 1)
+            parallel_isend!(send_explicit, peer, 701, reqs, 2)
+            parallel_waitall!(reqs, 2)
+            @test recv_explicit ≈ Float64[100.0 * (peer + 1), 200.0 * (peer + 1)]
+
+            send_any = Int32[myproc + 10, myproc + 20]
+            recv_any = zeros(Int32, 2)
+            parallel_irecv!(recv_any, PARALLEL_ANY_SOURCE, 702, reqs, 1)
+            parallel_isend!(send_any, peer, 702, reqs, 2)
+            parallel_waitall!(reqs, 2)
+            @test recv_any == Int32[peer + 10, peer + 20]
+
+            gather_send = Float64[Float64(myproc + 1)]
+            gather_recv = zeros(Float64, 2)
+            parallel_allgather!(gather_recv, gather_send)
+            @test gather_recv ≈ [1.0, 2.0]
         finally
             parallel_barrier()
             if parallel_ioprocessor()

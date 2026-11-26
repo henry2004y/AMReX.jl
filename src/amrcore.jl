@@ -119,6 +119,16 @@ AMReX cell tagging states (`amrex::TagBox::TagVal`):
 end
 
 """
+    TagBoxArrayHandle
+
+Non-owning `isbits` handle wrapping AMReX's native `amrex::TagBoxArray*` inside `ErrorEst`
+callbacks, avoiding extra `TagBoxArray` allocations and scalar triple-loop copies.
+"""
+struct TagBoxArrayHandle
+    ptr::Ptr{Cvoid}
+end
+
+"""
     TagBoxArray(ba::JlBoxArray, dm::JlDistributionMapping, nghost::Integer=0) -> JlTagBoxArrayAllocated
 
 Construct a cell-centered `TagBoxArray` with the given `BoxArray` and `DistributionMapping`.
@@ -126,31 +136,39 @@ Construct a cell-centered `TagBoxArray` with the given `BoxArray` and `Distribut
 TagBoxArray(ba::JlBoxArray, dm::JlDistributionMapping, nghost::Integer = 0) =
     JlTagBoxArray(ba, dm, Int32(nghost))
 
-"""
-    tag_array4(tb::JlTagBoxArray, mfi::JlMFIter) -> OffsetArray{Int8, 4, Array{Int8, 4}}
+@inline function _acquire_mfiter(tb::JlTagBoxArray, tiling::Bool)::MFIterHandle
+    return @ccall $(_FN_MFITER_ACQUIRE_TB[])(tb.cpp_object::Ptr{Cvoid}, UInt8(tiling)::UInt8)::MFIterHandle
+end
 
-Return a zero-copy 4D `OffsetArray{Int8, 4}` view `(i, j, k, 1)` over the local `TagBox` at `mfi`.
-Assign `Int8(TagSet)` (or `Int8(2)`) to mark cells for refinement and `Int8(TagClear)` (`0`) to clear.
-"""
-@inline function tag_array4(tb::JlTagBoxArray, mfi::JlMFIter)
-    info = Ref{NTuple{6, Int32}}()
-    ptr = GC.@preserve info tfab_info!(mfi, tb, Base.unsafe_convert(Ptr{Int32}, info)).cpp_object
-    lo0, lo1, lo2, hi0, hi1, hi2 = info[]
-    rx = Int(lo0):Int(hi0)
-    ry = Int(lo1):Int(hi1)
-    rz = Int(lo2):Int(hi2)
-    raw = unsafe_wrap(Array, ptr, (length(rx), length(ry), length(rz), 1); own = false)
-    return OffsetArray(raw, rx, ry, rz, 1:1)
+@inline function _acquire_mfiter(tb::TagBoxArrayHandle, tiling::Bool)::MFIterHandle
+    return @ccall $(_FN_MFITER_ACQUIRE_TB_RAW[])(tb.ptr::Ptr{Cvoid}, UInt8(tiling)::UInt8)::MFIterHandle
 end
 
 """
-    each_fab(f::Function, tb::JlTagBoxArray; tiling::Bool=false)
+    tag_array4(tb::Union{JlTagBoxArray, TagBoxArrayHandle}, mfi::Union{JlMFIter, MFIterHandle}) -> Array4View{Int8}
 
-Iterate over all local `TagBox`es of `tb`, calling `f(mfi, valid_bx, tag_arr)` where `tag_arr`
-is the zero-copy `OffsetArray{Int8, 4}` from `tag_array4(tb, mfi)`.
+Return a zero-allocation, zero-copy 4D `Array4View{Int8}` view `(i, j, k, 1)` over the
+local `TagBox` at `mfi`. Assign `Int8(TagSet)` (`2`) to mark cells for refinement and
+`Int8(TagClear)` (`0`) to clear.
 """
-function each_fab(f::F, tb::JlTagBoxArray; tiling::Bool = false) where {F}
-    mfi = JlMFIter(tb, tiling)
+@inline function tag_array4(tb::JlTagBoxArray, mfi::Union{JlMFIter, MFIterHandle})
+    fv = @ccall $(_FN_TFAB_VIEW[])(tb.cpp_object::Ptr{Cvoid}, _raw_mfi(mfi)::Ptr{Cvoid})::_CFabView
+    return _cfab_to_view(Int8, fv)
+end
+
+@inline function tag_array4(tb::TagBoxArrayHandle, mfi::Union{JlMFIter, MFIterHandle})
+    fv = @ccall $(_FN_TFAB_VIEW_RAW[])(tb.ptr::Ptr{Cvoid}, _raw_mfi(mfi)::Ptr{Cvoid})::_CFabView
+    return _cfab_to_view(Int8, fv)
+end
+
+"""
+    each_fab(f::Function, tb::Union{JlTagBoxArray, TagBoxArrayHandle}; tiling::Bool=false)
+
+Iterate over all local `TagBox`es of `tb` with zero heap allocations, calling
+`f(mfi, valid_bx, tag_arr)` where `tag_arr` is the zero-copy `Array4View{Int8}` from `tag_array4(tb, mfi)`.
+"""
+function each_fab(f::F, tb::Union{JlTagBoxArray, TagBoxArrayHandle}; tiling::Bool = false) where {F}
+    mfi = _acquire_mfiter(tb, tiling)
     try
         while is_valid(mfi)
             bx = tiling ? tile_box(mfi) : valid_box(mfi)
@@ -159,25 +177,37 @@ function each_fab(f::F, tb::JlTagBoxArray; tiling::Bool = false) where {F}
             next!(mfi)
         end
     finally
-        close!(mfi)
+        _release_mfiter(mfi)
     end
     return nothing
 end
 
-const _AMR_ERROR_CALLBACKS = Dict{UInt, Function}()
+const _AMR_ERROR_CALLBACKS = Dict{UInt64, Function}()
+const _ERROR_EST_TRAMPOLINE = Ref{Ptr{Cvoid}}(C_NULL)
+
+function _amrex_error_est_trampoline(amr_key::UInt64, lev::Cint, tags_ptr::UInt64, time::Cdouble)::Cvoid
+    cb = get(_AMR_ERROR_CALLBACKS, amr_key, nothing)
+    if cb !== nothing
+        cb(Int(lev), TagBoxArrayHandle(Ptr{Cvoid}(tags_ptr)), Float64(time))
+    end
+    return nothing
+end
 
 """
     on_error_est!(cb::Union{Nothing, Function}, amr::JlAmrCore)
 
-Register a dynamic Julia error-estimation callback `cb(lev::Int, tags::JlTagBoxArray, time::Float64)`
-invoked during `AmrCore` `init_from_scratch!` and `regrid_levels!`. Pass `nothing` to clear.
+Register a dynamic Julia error-estimation callback `cb(lev::Int, tags, time::Float64)`
+invoked directly by AMReX's C++ `ErrorEst` during `init_from_scratch!` and `regrid_levels!`.
+Pass `nothing` to clear.
 """
 function on_error_est!(cb::Union{Nothing, Function}, amr::JlAmrCore)
-    key = UInt(amr.cpp_object)
+    key = UInt64(core_key(amr))
     if cb === nothing
         delete!(_AMR_ERROR_CALLBACKS, key)
+        set_error_cb!(amr, UInt64(0))
     else
         _AMR_ERROR_CALLBACKS[key] = cb
+        set_error_cb!(amr, UInt64(_ERROR_EST_TRAMPOLINE[]))
     end
     return amr
 end
@@ -189,20 +219,7 @@ Initialize the AMR hierarchy from scratch at `time`, invoking any registered `on
 callback and/or refine boxes and tag masks on each level.
 """
 function init_from_scratch!(amr::JlAmrCore, time::Real = 0.0)
-    t = Float64(time)
-    cb = get(_AMR_ERROR_CALLBACKS, UInt(amr.cpp_object), nothing)
-    if cb === nothing
-        _init_from_scratch!(amr, t)
-    else
-        ensure_base_grids!(amr)
-        for lev in 0:(Int(max_level(amr)) - 1)
-            lev > Int(finest_level(amr)) && break
-            tags = TagBoxArray(box_array(amr, Int32(lev)), dmap(amr, Int32(lev)), 0)
-            cb(lev, tags, t)
-            set_tag_boxes!(amr, Int32(lev), tags)
-            _regrid_levels!(amr, Int32(lev), t)
-        end
-    end
+    _init_from_scratch!(amr, Float64(time))
     return nothing
 end
 
@@ -213,20 +230,7 @@ Rebuild all AMR levels finer than `base_lev` at `time`, invoking any registered 
 callback and/or refine boxes and tag masks on levels `>= base_lev`.
 """
 function regrid_levels!(amr::JlAmrCore, base_lev::Integer, time::Real = 0.0)
-    t = Float64(time)
-    lbase = Int(base_lev)
-    cb = get(_AMR_ERROR_CALLBACKS, UInt(amr.cpp_object), nothing)
-    if cb === nothing
-        _regrid_levels!(amr, Int32(lbase), t)
-    else
-        max_tag_lev = min(Int(finest_level(amr)), Int(max_level(amr)) - 1)
-        for lev in lbase:max_tag_lev
-            tags = TagBoxArray(box_array(amr, Int32(lev)), dmap(amr, Int32(lev)), 0)
-            cb(lev, tags, t)
-            set_tag_boxes!(amr, Int32(lev), tags)
-        end
-        _regrid_levels!(amr, Int32(lbase), t)
-    end
+    _regrid_levels!(amr, Int32(base_lev), Float64(time))
     return nothing
 end
 
@@ -636,7 +640,7 @@ Return the 0-based MPI rank of the calling process.
 """
     grid_index(it) -> Int
 
-Return the 0-based box index of the current `JlMFIter` or `JlParIter` tile.
+Return the 0-based box index of the current `JlMFIter`, `MFIterHandle`, `TileHandle`, `JlParIter`, or `ParIterHandle` tile.
 """
 @inline grid_index(it) = Int(index(it))
 

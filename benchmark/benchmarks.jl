@@ -54,6 +54,30 @@ let
         fill_boundary_finish!($mf_a)
     end
     SUITE["multifab"]["sum_boundary!"] = @benchmarkable sum_boundary!($mf_a, $geom)
+
+    mf_18 = MultiFab(ba, dm, 18, 1)
+    mf_aux = MultiFab(ba, dm, 6, 1)
+    set_val!(mf_18, 1.0)
+    set_val!(mf_aux, 0.5)
+    SUITE["multifab"]["each_fab_18comp_multi_array4"] = @benchmarkable begin
+        s = 0.0
+        each_fab($mf_18) do mfi, vbx, arr18
+            arr6 = array4($mf_aux, mfi)
+            rx, ry, rz = bounds(vbx)
+            @inbounds for k in rz, j in ry, i in rx
+                s += arr18[i, j, k, 1] + arr18[i, j, k, 18] + arr6[i, j, k, 1]
+            end
+        end
+        s
+    end
+    SUITE["multifab"]["each_fab_threaded"] = @benchmarkable begin
+        each_fab_threaded($mf_c) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            @inbounds for k in rz, j in ry, i in rx
+                arr[i, j, k, 1] = 2.0
+            end
+        end
+    end
 end
 
 # ----------------------------------------------------------------------------
@@ -99,5 +123,22 @@ let
             end
         end
         s
+    end
+    SUITE["particles"]["soa_views_scan"] = @benchmarkable begin
+        s = 0.0
+        each_particle_tile($pc, 0) do pti
+            sv = soa_views(pti, Val(4), Val(1))
+            @inbounds @simd for p in 1:(sv.np)
+                s += sv.px[p] + sv.py[p] + sv.real[2][p]
+            end
+        end
+        s
+    end
+    SUITE["particles"]["each_particle_tile_threaded"] = @benchmarkable begin
+        each_particle_tile_threaded($pc, 0, Val(4), Val(1)) do _, _, sv
+            @inbounds @simd for p in 1:(sv.np)
+                sv.real[1][p] = sv.real[1][p] * 1.0 + 0.0 * sv.px[p]
+            end
+        end
     end
 end

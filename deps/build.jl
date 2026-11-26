@@ -1,15 +1,17 @@
 using AMReX_jll
 using CxxWrap
+using Libdl
 
 function build_cshim(;
         custom_amrex_prefix::Union{Nothing, String} = nothing,
+        out_dir::Union{Nothing, String} = nothing,
         cxx::String = get(ENV, "CXX", "g++")
     )
     deps_dir = @__DIR__
     src_file = joinpath(deps_dir, "cshim", "amrex_jl_shim.cpp")
-    lib_dir = joinpath(deps_dir, "lib")
+    lib_dir = something(out_dir, joinpath(deps_dir, "lib"))
     mkpath(lib_dir)
-    out_lib = joinpath(lib_dir, "libamrex_jl_shim.so")
+    out_lib = joinpath(lib_dir, "libamrex_jl_shim." * Libdl.dlext)
 
     julia_inc = abspath(joinpath(Sys.BINDIR, "..", "include", "julia"))
     julia_lib = abspath(joinpath(Sys.BINDIR, "..", "lib"))
@@ -22,18 +24,11 @@ function build_cshim(;
     amrex_inc = joinpath(amrex_prefix, "include")
     amrex_lib = joinpath(amrex_prefix, "lib")
 
-    extra_libs = filter(isdir, AMReX_jll.LIBPATH_list)
-    extra_incs = filter(isdir, [joinpath(dirname(p), "include") for p in extra_libs])
-
     inc_flags = String[
         "-I$julia_inc",
         "-I$cxxwrap_inc",
         "-I$amrex_inc",
     ]
-    for inc in extra_incs
-        push!(inc_flags, "-I$inc")
-    end
-
     lib_flags = String[
         "-L$julia_lib",
         "-L$cxxwrap_lib",
@@ -42,16 +37,26 @@ function build_cshim(;
         "-Wl,-rpath,$cxxwrap_lib",
         "-Wl,-rpath,$amrex_lib",
     ]
-    for ldir in extra_libs
-        push!(lib_flags, "-L$ldir")
-        push!(lib_flags, "-Wl,-rpath,$ldir")
+
+    # Only include AMReX_jll transitive library paths (e.g., MPICH_jll) when building against AMReX_jll.
+    if custom_amrex_prefix === nothing
+        extra_libs = filter(isdir, AMReX_jll.LIBPATH_list)
+        extra_incs = filter(isdir, [joinpath(dirname(p), "include") for p in extra_libs])
+        for inc in extra_incs
+            push!(inc_flags, "-I$inc")
+        end
+        for ldir in extra_libs
+            push!(lib_flags, "-L$ldir")
+            push!(lib_flags, "-Wl,-rpath,$ldir")
+        end
     end
 
+    tmp_lib = out_lib * ".tmp.$(getpid())"
     cmd_args = String[
         cxx,
-        "-shared", "-fPIC", "-O3", "-std=c++20", "-fopenmp",
+        "-shared", "-fPIC", "-O3", "-DNDEBUG", "-std=c++20", "-fopenmp",
         src_file,
-        "-o", out_lib,
+        "-o", tmp_lib,
         inc_flags...,
         lib_flags...,
         "-lamrex_3d",
@@ -61,7 +66,13 @@ function build_cshim(;
     ]
 
     println("Compiling $out_lib ...")
-    run(Cmd(cmd_args))
+    try
+        run(Cmd(cmd_args))
+        mv(tmp_lib, out_lib; force = true)
+    catch
+        rm(tmp_lib; force = true)
+        rethrow()
+    end
     println("Successfully built $out_lib")
     return out_lib
 end

@@ -1,3 +1,14 @@
+@inline function _zero_alloc_fab_kernel!(mf_a::JlMultiFab, mf_b::JlMultiFab)
+    each_fab(mf_a) do mfi, vbx, arr_a
+        arr_b = array4(mf_b, mfi)
+        rx, ry, rz = bounds(vbx)
+        @inbounds for k in rz, j in ry, i in rx
+            arr_a[i, j, k, 1] = arr_a[i, j, k, 1] + 0.5 * arr_b[i, j, k, 1]
+        end
+    end
+    return nothing
+end
+
 @testset "MultiFab, iMultiFab, Zero-Copy OffsetArrays & Halo Exchange" begin
     let
         bx = Box(0, 0, 0, 7, 7, 0)
@@ -83,6 +94,31 @@
         imfi = JlMFIter(imf, false)
         @test @inferred(iarray4(imf, imfi)) isa AbstractArray{Int32, 4}
         close!(imfi)
+
+        # Array4View, IndexBox, zero-allocation each_fab, and each_fab_threaded
+        _zero_alloc_fab_kernel!(mf_a, mf_b)
+        alloc_fab = @allocated _zero_alloc_fab_kernel!(mf_a, mf_b)
+        @test alloc_fab == 0
+
+        mf_thr = MultiFab(ba, dm, 2, 1)
+        set_val!(mf_thr, 0.0)
+        each_fab_threaded(mf_thr) do th, vbx, arr
+            @test th isa Union{TileHandle, MFIterHandle}
+            @test vbx isa IndexBox
+            @test length(vbx, 0) > 0
+            @test !is_empty(vbx)
+            @test contains(vbx, first(bounds(vbx)[1]), first(bounds(vbx)[2]), first(bounds(vbx)[3]))
+            arr2 = array4(mf_a, th)
+            rx, ry, rz = bounds(vbx)
+            @inbounds for k in rz, j in ry, i in rx
+                arr[i, j, k, 1] = Float64(i + 2 * j + 1) + 0.0 * arr2[i, j, k, 1]
+                arr[i, j, k, 2] = Float64(k + 3)
+            end
+            @test size(arr)[4] == 2
+            @test length(axes(arr)) == 4
+            @test strides(arr)[1] == 1
+        end
+        @test min_val(mf_thr, Int32(1), Int32(0)) ≈ 3.0
     end
 
     @testset "YAFluxRegister, EdgeFluxRegister & average_down_faces!" begin

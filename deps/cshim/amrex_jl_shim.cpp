@@ -39,10 +39,20 @@
 #include <algorithm>
 #include <csignal>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
+#ifdef AMREX_USE_MPI
+#include <mpi.h>
+#endif
+
+#if defined(_WIN32)
+#define AMREX_JL_EXPORT __declspec(dllexport)
+#else
+#define AMREX_JL_EXPORT __attribute__((visibility("default")))
+#endif
 
 namespace {
 
@@ -574,7 +584,7 @@ struct JlBCRec {
 // AmrCore subclass for multi-level AMR hierarchy management
 // ============================================================================
 
-using ErrorEstCallbackFn = void (*)(int, uint64_t, double);
+using ErrorEstCallbackFn = void (*)(uint64_t, int, uint64_t, double);
 
 class AmrCoreImpl : public amrex::AmrCore {
 private:
@@ -608,6 +618,7 @@ public:
     std::vector<std::vector<amrex::RealBox>> refine_boxes;
     std::vector<std::unique_ptr<amrex::iMultiFab>> tag_masks;
     std::vector<std::unique_ptr<amrex::TagBoxArray>> tag_boxes;
+    ErrorEstCallbackFn error_cb = nullptr;
 
     AmrCoreImpl(const JlRealBox& rb, int max_level_in,
                 int nx, int ny, int nz, int coord,
@@ -675,8 +686,12 @@ protected:
         ClearDistributionMap(lev);
     }
 
-    void ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real /*time*/,
+    void ErrorEst(int lev, amrex::TagBoxArray& tags, amrex::Real time,
                   int /*ngrow*/) override {
+        if (error_cb != nullptr) {
+            error_cb(reinterpret_cast<uint64_t>(this), lev,
+                     reinterpret_cast<uint64_t>(&tags), static_cast<double>(time));
+        }
         if (lev < static_cast<int>(refine_boxes.size()) && !refine_boxes[lev].empty()) {
             const auto& geom_lev = Geom(lev);
             for (amrex::MFIter mfi(tags); mfi.isValid(); ++mfi) {
@@ -832,6 +847,13 @@ struct JlAmrCore {
         for (auto& t : core->tag_boxes) {
             t.reset();
         }
+    }
+
+    void set_error_cb(uint64_t fn_ptr) {
+        core->error_cb = reinterpret_cast<ErrorEstCallbackFn>(fn_ptr);
+    }
+    uint64_t core_key() const {
+        return reinterpret_cast<uint64_t>(core.get());
     }
 
     void ensure_base_grids() {
@@ -1132,8 +1154,13 @@ struct JlYAFluxRegister {
             &((*fz.mf)[*mfi.mfi])
         };
         amrex::Real dx_arr[AMREX_SPACEDIM] = {dx, dy, dz};
+#ifdef AMREX_USE_GPU
+        fr->CrseAdd(*mfi.mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp,
+                    amrex::RunOn::Gpu);
+#else
         fr->CrseAdd(*mfi.mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp,
                     amrex::RunOn::Host);
+#endif
     }
 
     void fine_add(const JlMFIter& mfi,
@@ -1146,8 +1173,13 @@ struct JlYAFluxRegister {
             &((*fz.mf)[*mfi.mfi])
         };
         amrex::Real dx_arr[AMREX_SPACEDIM] = {dx, dy, dz};
+#ifdef AMREX_USE_GPU
+        fr->FineAdd(*mfi.mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp,
+                    amrex::RunOn::Gpu);
+#else
         fr->FineAdd(*mfi.mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp,
                     amrex::RunOn::Host);
+#endif
     }
 
     void reflux(JlMultiFab& state, int srccomp, int destcomp, int numcomp) {
@@ -1597,6 +1629,32 @@ struct PlotfileStage {
 
 PlotfileStage g_plotfile_stage;
 
+struct NodalScratchCache {
+    std::unique_ptr<amrex::MultiFab> mf;
+    amrex::BoxArray ba;
+    amrex::DistributionMapping dm;
+    int ncomp = -1;
+
+    amrex::MultiFab& get(const amrex::MultiFab& target, int nc) {
+        if (!mf || ncomp != nc || ba != target.boxArray() || dm != target.DistributionMap()) {
+            ba = target.boxArray();
+            dm = target.DistributionMap();
+            ncomp = nc;
+            mf = std::make_unique<amrex::MultiFab>(ba, dm, nc, 0);
+        }
+        return *mf;
+    }
+
+    void reset() {
+        mf.reset();
+        ba = amrex::BoxArray();
+        dm = amrex::DistributionMapping();
+        ncomp = -1;
+    }
+};
+
+NodalScratchCache g_nodal_scratch;
+
 // ============================================================================
 // JLCXX Module Registration
 // ============================================================================
@@ -1630,6 +1688,7 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
     mod.method("amrex_initialized", []() { return amrex::Initialized(); });
     mod.method("amrex_finalize", []() {
         if (amrex::Initialized()) {
+            g_nodal_scratch.reset();
             const int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGINT, SIGTERM};
             struct sigaction saved_sa[7];
             for (int i = 0; i < 7; ++i) {
@@ -1877,6 +1936,8 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         .method("set_tag_mask!", &JlAmrCore::set_tag_mask)
         .method("set_tag_boxes!", &JlAmrCore::set_tag_boxes)
         .method("clear_tag_masks!", &JlAmrCore::clear_tag_masks)
+        .method("set_error_cb!", &JlAmrCore::set_error_cb)
+        .method("core_key", &JlAmrCore::core_key)
         .method("ensure_base_grids!", &JlAmrCore::ensure_base_grids)
         .method("_init_from_scratch!", &JlAmrCore::init_from_scratch)
         .method("_regrid_levels!", &JlAmrCore::regrid_levels)
@@ -2260,7 +2321,7 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
                                                int rx, int ry, int rz) {
         amrex::MultiFab f(*fine.mf, amrex::make_alias, icomp, ncomp);
         amrex::MultiFab c(*coarse.mf, amrex::make_alias, icomp, ncomp);
-        amrex::MultiFab ctmp(c.boxArray(), c.DistributionMap(), ncomp, 0);
+        amrex::MultiFab& ctmp = g_nodal_scratch.get(c, ncomp);
         ctmp.setVal(0.0);
         amrex::average_down_nodal(f, ctmp, amrex::IntVect(rx, ry, rz));
         amrex::MultiFab::Add(c, ctmp, 0, 0, ncomp, 0);
@@ -2440,3 +2501,512 @@ JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
         return amrex::VisMF::Exist(name);
     });
 }
+
+// ============================================================================
+// Direct C-ABI Fast Paths (Zero-Allocation Views, Thread-Local Pools, MPI P2P)
+// ============================================================================
+
+namespace {
+
+struct CIterHandle {
+    void* ptr;
+    void* slot;
+};
+
+struct CBoxBounds {
+    int32_t lo0, lo1, lo2, hi0, hi1, hi2;
+};
+
+struct CBoxInfo {
+    int32_t lo0, lo1, lo2, hi0, hi1, hi2;
+    uint8_t nodal0, nodal1, nodal2, _pad;
+};
+
+struct CFabView {
+    void* ptr;
+    int32_t lo0, lo1, lo2, hi0, hi1, hi2, ncomp, _pad;
+};
+
+struct CSoATileInfo {
+    int64_t np;
+    uint64_t* idcpu;
+    double* px;
+    double* py;
+    double* pz;
+    int32_t n_real;
+    int32_t n_int;
+};
+
+static inline CBoxInfo box_to_cinfo(const amrex::Box& bx) {
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CBoxInfo{
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2],
+        static_cast<uint8_t>(bx.type(0) == amrex::IndexType::NODE),
+        static_cast<uint8_t>(bx.type(1) == amrex::IndexType::NODE),
+        static_cast<uint8_t>(bx.type(2) == amrex::IndexType::NODE),
+        0
+    };
+}
+
+struct MFIterSlot {
+    alignas(amrex::MFIter) unsigned char storage[sizeof(amrex::MFIter)];
+    bool in_use = false;
+    amrex::MFIter* ptr() { return reinterpret_cast<amrex::MFIter*>(storage); }
+};
+
+struct ParIterSlot {
+    alignas(PureSoAParIter) unsigned char storage[sizeof(PureSoAParIter)];
+    bool in_use = false;
+    PureSoAParIter* ptr() { return reinterpret_cast<PureSoAParIter*>(storage); }
+};
+
+thread_local std::vector<std::unique_ptr<MFIterSlot>> tl_mfiter_slots;
+thread_local std::vector<std::unique_ptr<ParIterSlot>> tl_pariter_slots;
+
+static MFIterSlot* alloc_mfiter_slot() {
+    for (auto& s : tl_mfiter_slots) {
+        if (!s->in_use) {
+            s->in_use = true;
+            return s.get();
+        }
+    }
+    tl_mfiter_slots.push_back(std::make_unique<MFIterSlot>());
+    MFIterSlot* s = tl_mfiter_slots.back().get();
+    s->in_use = true;
+    return s;
+}
+
+static ParIterSlot* alloc_pariter_slot() {
+    for (auto& s : tl_pariter_slots) {
+        if (!s->in_use) {
+            s->in_use = true;
+            return s.get();
+        }
+    }
+    tl_pariter_slots.push_back(std::make_unique<ParIterSlot>());
+    ParIterSlot* s = tl_pariter_slots.back().get();
+    s->in_use = true;
+    return s;
+}
+
+} // anonymous namespace
+
+extern "C" {
+
+AMREX_JL_EXPORT uint8_t amrex_jl_is_gpu_build() {
+#ifdef AMREX_USE_GPU
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+AMREX_JL_EXPORT uint8_t amrex_jl_is_device_accessible(const JlMultiFab* mf) {
+#ifdef AMREX_USE_GPU
+    return (mf && mf->mf && amrex::Gpu::inLaunchRegion()) ? 1 : 0;
+#else
+    (void)mf;
+    return 0;
+#endif
+}
+
+AMREX_JL_EXPORT CBoxBounds amrex_jl_box_bounds(const JlBox* bx) {
+    const auto lo = bx->box.smallEnd();
+    const auto hi = bx->box.bigEnd();
+    return CBoxBounds{lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]};
+}
+
+AMREX_JL_EXPORT void* amrex_jl_jlmfi_raw(const JlMFIter* jlmfi) {
+    return jlmfi ? static_cast<void*>(jlmfi->mfi.get()) : nullptr;
+}
+
+AMREX_JL_EXPORT CIterHandle amrex_jl_mfiter_acquire_mf(const JlMultiFab* mf, uint8_t tiling) {
+    MFIterSlot* s = alloc_mfiter_slot();
+    new (s->storage) amrex::MFIter(*mf->mf, tiling != 0);
+    return CIterHandle{static_cast<void*>(s->ptr()), static_cast<void*>(s)};
+}
+
+AMREX_JL_EXPORT CIterHandle amrex_jl_mfiter_acquire_imf(const JliMultiFab* imf, uint8_t tiling) {
+    MFIterSlot* s = alloc_mfiter_slot();
+    new (s->storage) amrex::MFIter(*imf->imf, tiling != 0);
+    return CIterHandle{static_cast<void*>(s->ptr()), static_cast<void*>(s)};
+}
+
+AMREX_JL_EXPORT CIterHandle amrex_jl_mfiter_acquire_tb(const JlTagBoxArray* tb, uint8_t tiling) {
+    MFIterSlot* s = alloc_mfiter_slot();
+    new (s->storage) amrex::MFIter(*tb->tags, tiling != 0);
+    return CIterHandle{static_cast<void*>(s->ptr()), static_cast<void*>(s)};
+}
+
+AMREX_JL_EXPORT CIterHandle amrex_jl_mfiter_acquire_tb_raw(const amrex::TagBoxArray* tb, uint8_t tiling) {
+    MFIterSlot* s = alloc_mfiter_slot();
+    new (s->storage) amrex::MFIter(*tb, tiling != 0);
+    return CIterHandle{static_cast<void*>(s->ptr()), static_cast<void*>(s)};
+}
+
+AMREX_JL_EXPORT void amrex_jl_mfiter_release(void* slot_ptr) {
+    if (!slot_ptr) return;
+    MFIterSlot* s = static_cast<MFIterSlot*>(slot_ptr);
+    if (s->in_use) {
+        if (amrex::Initialized()) {
+            s->ptr()->~MFIter();
+        }
+        s->in_use = false;
+    }
+}
+
+AMREX_JL_EXPORT uint8_t amrex_jl_mfiter_is_valid(const amrex::MFIter* mfi) {
+    return (mfi && mfi->isValid()) ? 1 : 0;
+}
+
+AMREX_JL_EXPORT void amrex_jl_mfiter_next(amrex::MFIter* mfi) {
+    ++(*mfi);
+}
+
+AMREX_JL_EXPORT int32_t amrex_jl_mfiter_index(const amrex::MFIter* mfi) {
+    return static_cast<int32_t>(mfi->index());
+}
+
+AMREX_JL_EXPORT int32_t amrex_jl_mfiter_local_tile_index(const amrex::MFIter* mfi) {
+    return static_cast<int32_t>(mfi->LocalTileIndex());
+}
+
+AMREX_JL_EXPORT CBoxInfo amrex_jl_mfiter_valid_box(const amrex::MFIter* mfi) {
+    return box_to_cinfo(mfi->validbox());
+}
+
+AMREX_JL_EXPORT CBoxInfo amrex_jl_mfiter_tile_box(const amrex::MFIter* mfi) {
+    return box_to_cinfo(mfi->tilebox());
+}
+
+AMREX_JL_EXPORT CBoxInfo amrex_jl_mfiter_fab_box(const amrex::MFIter* mfi) {
+    return box_to_cinfo(mfi->fabbox());
+}
+
+AMREX_JL_EXPORT CFabView amrex_jl_fab_view(JlMultiFab* mf, const amrex::MFIter* mfi) {
+    auto& fab = (*mf->mf)[*mfi];
+    const auto& bx = fab.box();
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CFabView{
+        static_cast<void*>(fab.dataPtr()),
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], mf->n_comp(), 0
+    };
+}
+
+AMREX_JL_EXPORT CFabView amrex_jl_ifab_view(JliMultiFab* imf, const amrex::MFIter* mfi) {
+    auto& fab = (*imf->imf)[*mfi];
+    const auto& bx = fab.box();
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CFabView{
+        static_cast<void*>(fab.dataPtr()),
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], imf->n_comp(), 0
+    };
+}
+
+AMREX_JL_EXPORT CFabView amrex_jl_tfab_view(JlTagBoxArray* tb, const amrex::MFIter* mfi) {
+    auto& fab = (*tb->tags)[*mfi];
+    const auto& bx = fab.box();
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CFabView{
+        static_cast<void*>(fab.dataPtr()),
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], 1, 0
+    };
+}
+
+AMREX_JL_EXPORT CFabView amrex_jl_tfab_view_raw(amrex::TagBoxArray* tb, const amrex::MFIter* mfi) {
+    auto& fab = (*tb)[*mfi];
+    const auto& bx = fab.box();
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CFabView{
+        static_cast<void*>(fab.dataPtr()),
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], 1, 0
+    };
+}
+
+AMREX_JL_EXPORT CFabView amrex_jl_fab_view_by_gid(JlMultiFab* mf, int32_t gid) {
+    auto& fab = (*mf->mf)[static_cast<int>(gid)];
+    const auto& bx = fab.box();
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CFabView{
+        static_cast<void*>(fab.dataPtr()),
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], mf->n_comp(), 0
+    };
+}
+
+AMREX_JL_EXPORT CFabView amrex_jl_ifab_view_by_gid(JliMultiFab* imf, int32_t gid) {
+    auto& fab = (*imf->imf)[static_cast<int>(gid)];
+    const auto& bx = fab.box();
+    const auto lo = bx.smallEnd();
+    const auto hi = bx.bigEnd();
+    return CFabView{
+        static_cast<void*>(fab.dataPtr()),
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], imf->n_comp(), 0
+    };
+}
+
+AMREX_JL_EXPORT uint8_t amrex_jl_yafr_crse_has_work(const JlYAFluxRegister* fr, const amrex::MFIter* mfi) {
+    return fr->fr->CrseHasWork(*mfi) ? 1 : 0;
+}
+
+AMREX_JL_EXPORT uint8_t amrex_jl_yafr_fine_has_work(const JlYAFluxRegister* fr, const amrex::MFIter* mfi) {
+    return fr->fr->FineHasWork(*mfi) ? 1 : 0;
+}
+
+AMREX_JL_EXPORT void amrex_jl_yafr_crse_add(
+    JlYAFluxRegister* fr, const amrex::MFIter* mfi,
+    const JlMultiFab* fx, const JlMultiFab* fy, const JlMultiFab* fz,
+    double dx, double dy, double dz, double dt,
+    int32_t srccomp, int32_t destcomp, int32_t numcomp) {
+    std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> flux{
+        &((*fx->mf)[*mfi]), &((*fy->mf)[*mfi]), &((*fz->mf)[*mfi])
+    };
+    amrex::Real dx_arr[AMREX_SPACEDIM] = {dx, dy, dz};
+#ifdef AMREX_USE_GPU
+    fr->fr->CrseAdd(*mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp, amrex::RunOn::Gpu);
+#else
+    fr->fr->CrseAdd(*mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp, amrex::RunOn::Host);
+#endif
+}
+
+AMREX_JL_EXPORT void amrex_jl_yafr_fine_add(
+    JlYAFluxRegister* fr, const amrex::MFIter* mfi,
+    const JlMultiFab* fx, const JlMultiFab* fy, const JlMultiFab* fz,
+    double dx, double dy, double dz, double dt,
+    int32_t srccomp, int32_t destcomp, int32_t numcomp) {
+    std::array<amrex::FArrayBox const*, AMREX_SPACEDIM> flux{
+        &((*fx->mf)[*mfi]), &((*fy->mf)[*mfi]), &((*fz->mf)[*mfi])
+    };
+    amrex::Real dx_arr[AMREX_SPACEDIM] = {dx, dy, dz};
+#ifdef AMREX_USE_GPU
+    fr->fr->FineAdd(*mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp, amrex::RunOn::Gpu);
+#else
+    fr->fr->FineAdd(*mfi, flux, dx_arr, dt, srccomp, destcomp, numcomp, amrex::RunOn::Host);
+#endif
+}
+
+AMREX_JL_EXPORT void amrex_jl_efr_crse_add(
+    JlEdgeFluxRegister* efr, const amrex::MFIter* mfi,
+    const JlMultiFab* ex, const JlMultiFab* ey, const JlMultiFab* ez,
+    double dt_crse) {
+    amrex::Array<amrex::FArrayBox const*, AMREX_SPACEDIM> E_crse{
+        &((*ex->mf)[*mfi]), &((*ey->mf)[*mfi]), &((*ez->mf)[*mfi])
+    };
+    efr->efr->CrseAdd(*mfi, E_crse, dt_crse);
+}
+
+AMREX_JL_EXPORT void amrex_jl_efr_fine_add(
+    JlEdgeFluxRegister* efr, const amrex::MFIter* mfi,
+    const JlMultiFab* ex, const JlMultiFab* ey, const JlMultiFab* ez,
+    double dt_fine) {
+    amrex::Array<amrex::FArrayBox const*, AMREX_SPACEDIM> E_fine{
+        &((*ex->mf)[*mfi]), &((*ey->mf)[*mfi]), &((*ez->mf)[*mfi])
+    };
+    efr->efr->FineAdd(*mfi, E_fine, dt_fine);
+}
+
+AMREX_JL_EXPORT void* amrex_jl_jlpti_raw(const JlParIter* jlpti) {
+    return jlpti ? static_cast<void*>(jlpti->pti.get()) : nullptr;
+}
+
+AMREX_JL_EXPORT CIterHandle amrex_jl_pariter_acquire(JlParticleContainer* pc, int32_t lev) {
+    ParIterSlot* s = alloc_pariter_slot();
+    new (s->storage) PureSoAParIter(*pc->pc, lev);
+    return CIterHandle{static_cast<void*>(s->ptr()), static_cast<void*>(s)};
+}
+
+AMREX_JL_EXPORT void amrex_jl_pariter_release(void* slot_ptr) {
+    if (!slot_ptr) return;
+    ParIterSlot* s = static_cast<ParIterSlot*>(slot_ptr);
+    if (s->in_use) {
+        if (amrex::Initialized()) {
+            s->ptr()->~PureSoAParIter();
+        }
+        s->in_use = false;
+    }
+}
+
+AMREX_JL_EXPORT uint8_t amrex_jl_pariter_is_valid(const PureSoAParIter* pti) {
+    return (pti && pti->isValid()) ? 1 : 0;
+}
+
+AMREX_JL_EXPORT void amrex_jl_pariter_next(PureSoAParIter* pti) {
+    ++(*pti);
+}
+
+AMREX_JL_EXPORT int32_t amrex_jl_pariter_index(const PureSoAParIter* pti) {
+    return static_cast<int32_t>(pti->index());
+}
+
+AMREX_JL_EXPORT int32_t amrex_jl_pariter_local_tile_index(const PureSoAParIter* pti) {
+    return static_cast<int32_t>(pti->LocalTileIndex());
+}
+
+AMREX_JL_EXPORT int64_t amrex_jl_pariter_num_particles(const PureSoAParIter* pti) {
+    return static_cast<int64_t>(pti->numParticles());
+}
+
+AMREX_JL_EXPORT CBoxInfo amrex_jl_pariter_valid_box(const PureSoAParIter* pti) {
+    return box_to_cinfo(pti->validbox());
+}
+
+AMREX_JL_EXPORT CBoxInfo amrex_jl_pariter_tile_box(const PureSoAParIter* pti) {
+    return box_to_cinfo(pti->tilebox());
+}
+
+AMREX_JL_EXPORT void amrex_jl_pariter_resize_tile(PureSoAParIter* pti, int64_t new_size) {
+    pti->GetParticleTile().resize(new_size);
+}
+
+AMREX_JL_EXPORT uint64_t* amrex_jl_pariter_idcpu_ptr(PureSoAParIter* pti) {
+    return pti->GetStructOfArrays().GetIdCPUData().dataPtr();
+}
+
+AMREX_JL_EXPORT double* amrex_jl_pariter_pos_ptr(PureSoAParIter* pti, int32_t dir) {
+    return pti->GetStructOfArrays().GetRealData(dir).dataPtr();
+}
+
+AMREX_JL_EXPORT double* amrex_jl_pariter_real_ptr(PureSoAParIter* pti, int32_t comp) {
+    return pti->GetStructOfArrays().GetRealData(AMREX_SPACEDIM + comp).dataPtr();
+}
+
+AMREX_JL_EXPORT int32_t* amrex_jl_pariter_int_ptr(PureSoAParIter* pti, int32_t comp) {
+    return pti->GetStructOfArrays().GetIntData(comp).dataPtr();
+}
+
+AMREX_JL_EXPORT CSoATileInfo amrex_jl_pariter_soa_info(
+    PureSoAParIter* pti,
+    double** real_ptrs, int32_t max_real,
+    int32_t** int_ptrs, int32_t max_int) {
+    auto& soa = pti->GetStructOfArrays();
+    int32_t nr = std::max(0, soa.NumRealComps() - AMREX_SPACEDIM);
+    int32_t ni = std::max(0, soa.NumIntComps());
+    int32_t nr_copy = std::min(nr, max_real);
+    int32_t ni_copy = std::min(ni, max_int);
+    for (int32_t c = 0; c < nr_copy; ++c) {
+        real_ptrs[c] = soa.GetRealData(AMREX_SPACEDIM + c).dataPtr();
+    }
+    for (int32_t c = 0; c < ni_copy; ++c) {
+        int_ptrs[c] = soa.GetIntData(c).dataPtr();
+    }
+    return CSoATileInfo{
+        static_cast<int64_t>(pti->numParticles()),
+        soa.GetIdCPUData().dataPtr(),
+        soa.GetRealData(0).dataPtr(),
+        soa.GetRealData(1).dataPtr(),
+        soa.GetRealData(2).dataPtr(),
+        nr,
+        ni
+    };
+}
+
+AMREX_JL_EXPORT CSoATileInfo amrex_jl_tile_soa_info(
+    JlParticleContainer* pc, int32_t lev, int32_t gid, int32_t tid,
+    double** real_ptrs, int32_t max_real,
+    int32_t** int_ptrs, int32_t max_int) {
+    auto& ptile = pc->pc->DefineAndReturnParticleTile(lev, gid, tid);
+    auto& soa = ptile.GetStructOfArrays();
+    int32_t nr = std::max(0, pc->num_runtime_real);
+    int32_t ni = std::max(0, pc->num_runtime_int);
+    int32_t nr_copy = std::min(nr, max_real);
+    int32_t ni_copy = std::min(ni, max_int);
+    for (int32_t c = 0; c < nr_copy; ++c) {
+        real_ptrs[c] = soa.GetRealData(AMREX_SPACEDIM + c).dataPtr();
+    }
+    for (int32_t c = 0; c < ni_copy; ++c) {
+        int_ptrs[c] = soa.GetIntData(c).dataPtr();
+    }
+    return CSoATileInfo{
+        static_cast<int64_t>(ptile.numParticles()),
+        soa.GetIdCPUData().dataPtr(),
+        soa.GetRealData(0).dataPtr(),
+        soa.GetRealData(1).dataPtr(),
+        soa.GetRealData(2).dataPtr(),
+        nr,
+        ni
+    };
+}
+
+AMREX_JL_EXPORT int64_t amrex_jl_tile_num_particles(JlParticleContainer* pc, int32_t lev, int32_t gid, int32_t tid) {
+    return static_cast<int64_t>(pc->pc->DefineAndReturnParticleTile(lev, gid, tid).numParticles());
+}
+
+AMREX_JL_EXPORT uint64_t* amrex_jl_tile_idcpu_ptr(JlParticleContainer* pc, int32_t lev, int32_t gid, int32_t tid) {
+    return pc->pc->DefineAndReturnParticleTile(lev, gid, tid).GetStructOfArrays().GetIdCPUData().dataPtr();
+}
+
+AMREX_JL_EXPORT double* amrex_jl_tile_pos_ptr(JlParticleContainer* pc, int32_t lev, int32_t gid, int32_t tid, int32_t dir) {
+    return pc->pc->DefineAndReturnParticleTile(lev, gid, tid).GetStructOfArrays().GetRealData(dir).dataPtr();
+}
+
+AMREX_JL_EXPORT double* amrex_jl_tile_real_ptr(JlParticleContainer* pc, int32_t lev, int32_t gid, int32_t tid, int32_t comp) {
+    return pc->pc->DefineAndReturnParticleTile(lev, gid, tid).GetStructOfArrays().GetRealData(AMREX_SPACEDIM + comp).dataPtr();
+}
+
+AMREX_JL_EXPORT int32_t* amrex_jl_tile_int_ptr(JlParticleContainer* pc, int32_t lev, int32_t gid, int32_t tid, int32_t comp) {
+    return pc->pc->DefineAndReturnParticleTile(lev, gid, tid).GetStructOfArrays().GetIntData(comp).dataPtr();
+}
+
+AMREX_JL_EXPORT int32_t amrex_jl_mpi_request_sizeof() {
+#ifdef AMREX_USE_MPI
+    return static_cast<int32_t>(sizeof(MPI_Request));
+#else
+    return static_cast<int32_t>(sizeof(uint64_t));
+#endif
+}
+
+AMREX_JL_EXPORT void amrex_jl_mpi_irecv_bytes(
+    void* buf, int64_t nbytes, int32_t src_rank, int32_t tag,
+    void* req_buf, int32_t req_idx_0based) {
+#ifdef AMREX_USE_MPI
+    int src = (src_rank < 0) ? MPI_ANY_SOURCE : static_cast<int>(src_rank);
+    MPI_Request* reqs = static_cast<MPI_Request*>(req_buf);
+    MPI_Irecv(buf, static_cast<int>(nbytes), MPI_BYTE, src, static_cast<int>(tag),
+              amrex::ParallelDescriptor::Communicator(), &reqs[req_idx_0based]);
+#else
+    (void)buf; (void)nbytes; (void)src_rank; (void)tag; (void)req_buf; (void)req_idx_0based;
+#endif
+}
+
+AMREX_JL_EXPORT void amrex_jl_mpi_isend_bytes(
+    const void* buf, int64_t nbytes, int32_t dst_rank, int32_t tag,
+    void* req_buf, int32_t req_idx_0based) {
+#ifdef AMREX_USE_MPI
+    MPI_Request* reqs = static_cast<MPI_Request*>(req_buf);
+    MPI_Isend(buf, static_cast<int>(nbytes), MPI_BYTE, static_cast<int>(dst_rank),
+              static_cast<int>(tag), amrex::ParallelDescriptor::Communicator(),
+              &reqs[req_idx_0based]);
+#else
+    (void)buf; (void)nbytes; (void)dst_rank; (void)tag; (void)req_buf; (void)req_idx_0based;
+#endif
+}
+
+AMREX_JL_EXPORT void amrex_jl_mpi_waitall(int32_t count, void* req_buf) {
+#ifdef AMREX_USE_MPI
+    if (count > 0) {
+        MPI_Waitall(static_cast<int>(count), static_cast<MPI_Request*>(req_buf), MPI_STATUSES_IGNORE);
+    }
+#else
+    (void)count; (void)req_buf;
+#endif
+}
+
+AMREX_JL_EXPORT void amrex_jl_mpi_allgather_bytes(
+    const void* sendbuf, void* recvbuf, int64_t nbytes_per_rank) {
+#ifdef AMREX_USE_MPI
+    MPI_Allgather(sendbuf, static_cast<int>(nbytes_per_rank), MPI_BYTE,
+                  recvbuf, static_cast<int>(nbytes_per_rank), MPI_BYTE,
+                  amrex::ParallelDescriptor::Communicator());
+#else
+    if (nbytes_per_rank > 0) {
+        std::memcpy(recvbuf, sendbuf, static_cast<std::size_t>(nbytes_per_rank));
+    }
+#endif
+}
+
+} // extern "C"

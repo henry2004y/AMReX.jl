@@ -1,3 +1,19 @@
+@inline function _zero_alloc_particle_kernel!(pc::JlParticleContainer)
+    each_particle_tile(pc, 0) do pti
+        np = Int(num_particles(pti))
+        idcpus = idcpu_vec(pti)
+        px, py, pz = pos_vecs(pti)
+        w = real_vec(pti, 1)
+        sup = int_vec(pti, 1)
+        sv = soa_views(pti, Val(4), Val(1))
+        @inbounds for p in 1:np
+            w[p] += 0.0 * (px[p] + py[p] + pz[p] + Float64(sup[p]) +
+                 Float64(is_valid_idcpu(idcpus[p])) + sv.real[2][p] + Float64(sv.int[1][p]))
+        end
+    end
+    return nothing
+end
+
 @testset "Pure-SoA ParticleContainer, 64-bit idcpu, Redistribute! & Plotfiles" begin
     let
         @test @inferred(pack_idcpu(Int64(10), 0)) isa UInt64
@@ -59,6 +75,30 @@
         end
         redistribute!(pc, Int32(0), Int32(0), Int32(0))
         @test total_number_of_particles(pc, true, false) == 60
+
+        # Zero-allocation particle tile traversal, SoATileViews, PtrVector, & threaded traversal
+        _zero_alloc_particle_kernel!(pc)
+        alloc_ptl = @allocated _zero_alloc_particle_kernel!(pc)
+        @test alloc_ptl == 0
+
+        each_particle_tile(pc, 0) do pti
+            gid = index(pti)
+            tid = local_tile_index(pti)
+            sv = soa_views(pti, Val(4), Val(1))
+            tsv = tile_soa_views(pc, 0, gid, tid, Val(4), Val(1))
+            @test sv.np == tsv.np
+            @test pointer(sv.px) == pointer(tsv.px)
+            @test length(sv.real) == 4
+            @test length(sv.int) == 1
+            @test strides(sv.px) == (1,)
+        end
+
+        acc_thr = Threads.Atomic{Int}(0)
+        each_particle_tile_threaded(pc, 0, Val(4), Val(1)) do gid, tid, views
+            Threads.atomic_add!(acc_thr, views.np)
+            @test pointer(views.real[1]) != C_NULL || views.np == 0
+        end
+        @test acc_thr[] == 60
 
         mktempdir() do tmpdir
             plt_dir = joinpath(tmpdir, "plt00000")

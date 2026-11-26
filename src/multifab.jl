@@ -1,6 +1,132 @@
 # ============================================================================
-# MultiFab, iMultiFab, MFIter, and Zero-Copy OffsetArray Views
+# MultiFab, iMultiFab, MFIterHandle, TileHandle, and Zero-Alloc Array4View
 # ============================================================================
+
+struct _CFabView
+    ptr::Ptr{Cvoid}
+    lo0::Int32
+    lo1::Int32
+    lo2::Int32
+    hi0::Int32
+    hi1::Int32
+    hi2::Int32
+    ncomp::Int32
+    _pad::Int32
+end
+
+"""
+    Array4View{T} <: AbstractArray{T, 4}
+
+Immutable, `isbits`, non-owning zero-allocation 4D view over an AMReX `FArrayBox` /
+`IArrayBox` / `TagBox` buffer with 0-based spatial coordinates `(i, j, k)` and 1-based
+component index `n`.
+
+**Lifetime contract**: `Array4View` holds a raw pointer into AMReX's C++ arena and must
+never be stored across `regrid_levels!`, `redistribute!`, or `MultiFab` destruction.
+"""
+struct Array4View{T} <: AbstractArray{T, 4}
+    ptr::Ptr{T}
+    lo::NTuple{3, Int}
+    dims::NTuple{4, Int}
+end
+
+@inline Base.IndexStyle(::Type{<:Array4View}) = IndexCartesian()
+@inline Base.size(v::Array4View) = v.dims
+@inline Base.axes(v::Array4View) = (
+    v.lo[1]:(v.lo[1] + v.dims[1] - 1),
+    v.lo[2]:(v.lo[2] + v.dims[2] - 1),
+    v.lo[3]:(v.lo[3] + v.dims[3] - 1),
+    Base.OneTo(v.dims[4]),
+)
+@inline Base.pointer(v::Array4View) = v.ptr
+@inline Base.unsafe_convert(::Type{Ptr{T}}, v::Array4View{T}) where {T} = v.ptr
+@inline Base.strides(v::Array4View) = (1, v.dims[1], v.dims[1] * v.dims[2], v.dims[1] * v.dims[2] * v.dims[3])
+@inline Base.elsize(::Type{Array4View{T}}) where {T} = sizeof(T)
+
+@inline Base.@propagate_inbounds function Base.getindex(v::Array4View{T}, i::Int, j::Int, k::Int, n::Int) where {T}
+    @boundscheck checkbounds(v, i, j, k, n)
+    lin = (i - v.lo[1]) + v.dims[1] * ((j - v.lo[2]) + v.dims[2] * ((k - v.lo[3]) + v.dims[3] * (n - 1))) + 1
+    return unsafe_load(v.ptr, lin)
+end
+
+@inline Base.@propagate_inbounds function Base.setindex!(v::Array4View{T}, val, i::Int, j::Int, k::Int, n::Int) where {T}
+    @boundscheck checkbounds(v, i, j, k, n)
+    lin = (i - v.lo[1]) + v.dims[1] * ((j - v.lo[2]) + v.dims[2] * ((k - v.lo[3]) + v.dims[3] * (n - 1))) + 1
+    unsafe_store!(v.ptr, convert(T, val), lin)
+    return val
+end
+
+@inline function _cfab_to_view(::Type{T}, fv::_CFabView) where {T}
+    nx = Int(fv.hi0) - Int(fv.lo0) + 1
+    ny = Int(fv.hi1) - Int(fv.lo1) + 1
+    nz = Int(fv.hi2) - Int(fv.lo2) + 1
+    nc = Int(fv.ncomp)
+    return Array4View{T}(
+        Ptr{T}(fv.ptr),
+        (Int(fv.lo0), Int(fv.lo1), Int(fv.lo2)),
+        (nx, ny, nz, nc),
+    )
+end
+
+"""
+    MFIterHandle
+
+Zero-allocation `isbits` handle to a thread-local pooled `amrex::MFIter` used inside `each_fab`.
+"""
+struct MFIterHandle
+    ptr::Ptr{Cvoid}
+    slot::Ptr{Cvoid}
+end
+
+"""
+    TileHandle
+
+Zero-allocation `isbits` tile descriptor passed to worker closures in `each_fab_threaded`.
+Supports `index(th)`, `grid_index(th)`, `local_tile_index(th)`, `valid_box(th)`, `array4(mf, th)`,
+and `iarray4(imf, th)`.
+"""
+struct TileHandle
+    gid::Int32
+    tid::Int32
+    vbx::IndexBox
+end
+
+@inline _raw_mfi(mfi::MFIterHandle)::Ptr{Cvoid} = mfi.ptr
+@inline _raw_mfi(mfi::JlMFIter)::Ptr{Cvoid} =
+    @ccall $(_FN_JLMFI_RAW[])(mfi.cpp_object::Ptr{Cvoid})::Ptr{Cvoid}
+
+@inline is_valid(mfi::MFIterHandle)::Bool =
+    (@ccall $(_FN_MFITER_IS_VALID[])(mfi.ptr::Ptr{Cvoid})::UInt8) != 0
+@inline next!(mfi::MFIterHandle) =
+    (@ccall $(_FN_MFITER_NEXT[])(mfi.ptr::Ptr{Cvoid})::Cvoid; nothing)
+@inline index(mfi::MFIterHandle)::Int32 =
+    @ccall $(_FN_MFITER_INDEX[])(mfi.ptr::Ptr{Cvoid})::Int32
+@inline local_tile_index(mfi::MFIterHandle)::Int32 =
+    @ccall $(_FN_MFITER_LOCAL_TILE_INDEX[])(mfi.ptr::Ptr{Cvoid})::Int32
+@inline valid_box(mfi::MFIterHandle)::IndexBox =
+    IndexBox(@ccall $(_FN_MFITER_VALID_BOX[])(mfi.ptr::Ptr{Cvoid})::_CBoxInfo)
+@inline tile_box(mfi::MFIterHandle)::IndexBox =
+    IndexBox(@ccall $(_FN_MFITER_TILE_BOX[])(mfi.ptr::Ptr{Cvoid})::_CBoxInfo)
+@inline fab_box(mfi::MFIterHandle)::IndexBox =
+    IndexBox(@ccall $(_FN_MFITER_FAB_BOX[])(mfi.ptr::Ptr{Cvoid})::_CBoxInfo)
+
+@inline index(th::TileHandle)::Int32 = th.gid
+@inline local_tile_index(th::TileHandle)::Int32 = th.tid
+@inline valid_box(th::TileHandle)::IndexBox = th.vbx
+@inline tile_box(th::TileHandle)::IndexBox = th.vbx
+
+@inline function _acquire_mfiter(mf::JlMultiFab, tiling::Bool)::MFIterHandle
+    return @ccall $(_FN_MFITER_ACQUIRE_MF[])(mf.cpp_object::Ptr{Cvoid}, UInt8(tiling)::UInt8)::MFIterHandle
+end
+
+@inline function _acquire_mfiter(imf::JliMultiFab, tiling::Bool)::MFIterHandle
+    return @ccall $(_FN_MFITER_ACQUIRE_IMF[])(imf.cpp_object::Ptr{Cvoid}, UInt8(tiling)::UInt8)::MFIterHandle
+end
+
+@inline function _release_mfiter(mfi::MFIterHandle)
+    @ccall $(_FN_MFITER_RELEASE[])(mfi.slot::Ptr{Cvoid})::Cvoid
+    return nothing
+end
 
 """
     MultiFab(ba::JlBoxArray, dm::JlDistributionMapping, ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}})
@@ -47,50 +173,46 @@ function iMultiFab(
 end
 
 """
-    array4(mf::JlMultiFab, mfi::JlMFIter) -> OffsetArray{Float64, 4, Array{Float64, 4}}
+    array4(mf::JlMultiFab, mfi::Union{JlMFIter, MFIterHandle, TileHandle}) -> Array4View{Float64}
 
-Return a zero-copy 4D `OffsetArray` view `(i, j, k, n)` over the local `FArrayBox`
-at `mfi`, where `(i, j, k)` spans the full allocated `fab_box` (including ghost cells)
-in 0-based AMReX coordinates and `n` spans `1:n_comp(mf)`.
+Return a zero-allocation, zero-copy 4D `Array4View{Float64}` view `(i, j, k, n)` over the
+local `FArrayBox` at `mfi`, where `(i, j, k)` spans the full allocated `fab_box`
+(including ghost cells) in 0-based AMReX coordinates and `n` spans `1:n_comp(mf)`.
 """
-@inline function array4(mf::JlMultiFab, mfi::JlMFIter)
-    info = Ref{NTuple{7, Int32}}()
-    ptr = GC.@preserve info fab_info!(mfi, mf, Base.unsafe_convert(Ptr{Int32}, info)).cpp_object
-    lo0, lo1, lo2, hi0, hi1, hi2, nc32 = info[]
-    rx = Int(lo0):Int(hi0)
-    ry = Int(lo1):Int(hi1)
-    rz = Int(lo2):Int(hi2)
-    nc = Int(nc32)
-    raw = unsafe_wrap(Array, ptr, (length(rx), length(ry), length(rz), nc); own = false)
-    return OffsetArray(raw, rx, ry, rz, 1:nc)
+@inline function array4(mf::JlMultiFab, mfi::Union{JlMFIter, MFIterHandle})
+    fv = @ccall $(_FN_FAB_VIEW[])(mf.cpp_object::Ptr{Cvoid}, _raw_mfi(mfi)::Ptr{Cvoid})::_CFabView
+    return _cfab_to_view(Float64, fv)
+end
+
+@inline function array4(mf::JlMultiFab, th::TileHandle)
+    fv = @ccall $(_FN_FAB_VIEW_BY_GID[])(mf.cpp_object::Ptr{Cvoid}, th.gid::Int32)::_CFabView
+    return _cfab_to_view(Float64, fv)
 end
 
 """
-    iarray4(imf::JliMultiFab, mfi::JlMFIter) -> OffsetArray{Int32, 4, Array{Int32, 4}}
+    iarray4(imf::JliMultiFab, mfi::Union{JlMFIter, MFIterHandle, TileHandle}) -> Array4View{Int32}
 
-Return a zero-copy 4D `OffsetArray` view `(i, j, k, n)` over the local `IArrayBox`
-at `mfi`, where `(i, j, k)` spans `fab_box(mfi)` and `n` spans `1:n_comp(imf)`.
+Return a zero-allocation, zero-copy 4D `Array4View{Int32}` view `(i, j, k, n)` over the
+local `IArrayBox` at `mfi`.
 """
-@inline function iarray4(imf::JliMultiFab, mfi::JlMFIter)
-    info = Ref{NTuple{7, Int32}}()
-    ptr = GC.@preserve info ifab_info!(mfi, imf, Base.unsafe_convert(Ptr{Int32}, info)).cpp_object
-    lo0, lo1, lo2, hi0, hi1, hi2, nc32 = info[]
-    rx = Int(lo0):Int(hi0)
-    ry = Int(lo1):Int(hi1)
-    rz = Int(lo2):Int(hi2)
-    nc = Int(nc32)
-    raw = unsafe_wrap(Array, ptr, (length(rx), length(ry), length(rz), nc); own = false)
-    return OffsetArray(raw, rx, ry, rz, 1:nc)
+@inline function iarray4(imf::JliMultiFab, mfi::Union{JlMFIter, MFIterHandle})
+    fv = @ccall $(_FN_IFAB_VIEW[])(imf.cpp_object::Ptr{Cvoid}, _raw_mfi(mfi)::Ptr{Cvoid})::_CFabView
+    return _cfab_to_view(Int32, fv)
+end
+
+@inline function iarray4(imf::JliMultiFab, th::TileHandle)
+    fv = @ccall $(_FN_IFAB_VIEW_BY_GID[])(imf.cpp_object::Ptr{Cvoid}, th.gid::Int32)::_CFabView
+    return _cfab_to_view(Int32, fv)
 end
 
 """
-    each_fab(f::Function, mf::JlMultiFab; tiling::Bool=false)
+    each_fab(f::Function, mf::Union{JlMultiFab, JliMultiFab}; tiling::Bool=false)
 
-Iterate over all local FABs/tiles of `mf`, calling `f(mfi, valid_bx, arr)` where `arr`
-is the zero-copy `OffsetArray` from `array4(mf, mfi)`.
+Iterate over all local FABs/tiles of `mf` with zero heap allocations, calling
+`f(mfi, valid_bx, arr)` where `vbx` is an `IndexBox` and `arr` is an `Array4View`.
 """
 function each_fab(f::F, mf::JlMultiFab; tiling::Bool = false) where {F}
-    mfi = JlMFIter(mf, tiling)
+    mfi = _acquire_mfiter(mf, tiling)
     try
         while is_valid(mfi)
             bx = tiling ? tile_box(mfi) : valid_box(mfi)
@@ -99,13 +221,13 @@ function each_fab(f::F, mf::JlMultiFab; tiling::Bool = false) where {F}
             next!(mfi)
         end
     finally
-        close!(mfi)
+        _release_mfiter(mfi)
     end
     return nothing
 end
 
 function each_fab(f::F, imf::JliMultiFab; tiling::Bool = false) where {F}
-    mfi = JlMFIter(imf, tiling)
+    mfi = _acquire_mfiter(imf, tiling)
     try
         while is_valid(mfi)
             bx = tiling ? tile_box(mfi) : valid_box(mfi)
@@ -114,7 +236,64 @@ function each_fab(f::F, imf::JliMultiFab; tiling::Bool = false) where {F}
             next!(mfi)
         end
     finally
-        close!(mfi)
+        _release_mfiter(mfi)
+    end
+    return nothing
+end
+
+"""
+    each_fab_threaded(f::Function, mf::Union{JlMultiFab, JliMultiFab}; tiling::Bool=true)
+
+Pre-collect all local FAB/tile descriptors `(TileHandle, IndexBox, Array4View)` and
+execute `f(th, vbx, arr)` across Julia threads (`Threads.@threads :static`). Falls back to
+`each_fab` when `Threads.nthreads() == 1`.
+"""
+function each_fab_threaded(f::F, mf::JlMultiFab; tiling::Bool = true) where {F}
+    if Threads.nthreads() <= 1
+        return each_fab(f, mf; tiling = tiling)
+    end
+    nloc = Int(local_size(mf))
+    tiles = Vector{Tuple{TileHandle, Array4View{Float64}}}()
+    sizehint!(tiles, nloc)
+    mfi = _acquire_mfiter(mf, tiling)
+    try
+        while is_valid(mfi)
+            bx = tiling ? tile_box(mfi) : valid_box(mfi)
+            th = TileHandle(index(mfi), local_tile_index(mfi), bx)
+            push!(tiles, (th, array4(mf, mfi)))
+            next!(mfi)
+        end
+    finally
+        _release_mfiter(mfi)
+    end
+    Threads.@threads :static for idx in eachindex(tiles)
+        th, arr = @inbounds tiles[idx]
+        f(th, th.vbx, arr)
+    end
+    return nothing
+end
+
+function each_fab_threaded(f::F, imf::JliMultiFab; tiling::Bool = true) where {F}
+    if Threads.nthreads() <= 1
+        return each_fab(f, imf; tiling = tiling)
+    end
+    nloc = Int(local_size(imf))
+    tiles = Vector{Tuple{TileHandle, Array4View{Int32}}}()
+    sizehint!(tiles, nloc)
+    mfi = _acquire_mfiter(imf, tiling)
+    try
+        while is_valid(mfi)
+            bx = tiling ? tile_box(mfi) : valid_box(mfi)
+            th = TileHandle(index(mfi), local_tile_index(mfi), bx)
+            push!(tiles, (th, iarray4(imf, mfi)))
+            next!(mfi)
+        end
+    finally
+        _release_mfiter(mfi)
+    end
+    Threads.@threads :static for idx in eachindex(tiles)
+        th, arr = @inbounds tiles[idx]
+        f(th, th.vbx, arr)
     end
     return nothing
 end
