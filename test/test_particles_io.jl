@@ -7,8 +7,10 @@
         sup = int_vec(pti, 1)
         sv = soa_views(pti, Val(4), Val(1))
         @inbounds for p in 1:np
-            w[p] += 0.0 * (px[p] + py[p] + pz[p] + Float64(sup[p]) +
-                 Float64(is_valid_idcpu(idcpus[p])) + sv.real[2][p] + Float64(sv.int[1][p]))
+            w[p] += 0.0 * (
+                px[p] + py[p] + pz[p] + Float64(sup[p]) +
+                    Float64(is_valid_idcpu(idcpus[p])) + sv.real[2][p] + Float64(sv.int[1][p])
+            )
         end
     end
     return nothing

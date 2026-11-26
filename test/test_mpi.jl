@@ -181,8 +181,8 @@ try
         # Time-interpolated fill_patch_two_levels! across 2 ranks
         cmf_t0 = MultiFab(ba0_ml, dm0_ml, 1, 1); set_val!(cmf_t0, 4.0)
         cmf_t1 = MultiFab(ba0_ml, dm0_ml, 1, 1); set_val!(cmf_t1, 8.0)
-        fmf_t  = MultiFab(ba1_ml, dm1_ml, 1, 1); set_val!(fmf_t, 6.0)
-        dst_t  = MultiFab(ba1_ml, dm1_ml, 1, 1); set_val!(dst_t, 0.0)
+        fmf_t = MultiFab(ba1_ml, dm1_ml, 1, 1); set_val!(fmf_t, 6.0)
+        dst_t = MultiFab(ba1_ml, dm1_ml, 1, 1); set_val!(dst_t, 0.0)
         fill_patch_two_levels!(
             dst_t, 0.5, cmf_t0, 0.0, cmf_t1, 1.0, fmf_t, 0.5,
             0, 0, 1, g0_ml, g1_ml, rr_ml, CellConservativeLinear
