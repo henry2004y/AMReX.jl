@@ -2,6 +2,9 @@ ENV["OMP_NUM_THREADS"] = get(ENV, "OMP_NUM_THREADS", "1")
 
 using Test
 using AMReX
+using Krylov
+using LinearAlgebra: mul!, norm
+using LinearOperators: LinearOperator
 
 if !amrex_initialized()
     amrex_init(false)
@@ -337,6 +340,38 @@ try
             gather_recv = zeros(Float64, 2)
             parallel_allgather!(gather_recv, gather_send)
             @test gather_recv ≈ [1.0, 2.0]
+
+            # 8. MPIDistVector + Krylov & solve_cell_poisson_mlmg! across 2 ranks
+            b_loc = MPIDistVector([1.0 + myproc, 2.0 + myproc])
+            A_loc = [3.0 0.5; 0.5 4.0]
+            A_op = LinearOperator(Float64, 2, 2, true, true, (out, v) -> (mul!(out.data, A_loc, v.data); out))
+            sol_cg, stats_cg = Krylov.cg(A_op, b_loc; rtol = 1.0e-12, atol = 1.0e-12)
+            @test stats_cg.solved
+            @test norm(A_loc * sol_cg.data - b_loc.data) < 1.0e-11
+
+            sol_g, stats_g = Krylov.gmres(A_op, b_loc; rtol = 1.0e-12, atol = 1.0e-12)
+            @test stats_g.solved
+            @test norm(A_loc * sol_g.data - b_loc.data) < 1.0e-11
+
+            amr_p = build_amrcore((16, 16, 1), (0.0, 0.0, 0.0), (2π, 2π, 1.0); is_periodic = (true, false, true), max_grid_size = 8)
+            rhs_p = allocate_cell_mf(amr_p, 0, 1, 0)
+            sol_p = allocate_cell_mf(amr_p, 0, 1, 1; init_val = 0.0)
+            geom_p = geometry(amr_p, 0)
+            dx_p = cell_sizes(geom_p)
+            plo_p = prob_lo_tuple(geom_p)
+            each_fab(rhs_p) do _, vbx, r_arr
+                rx, ry, rz = bounds(vbx)
+                for k in rz, j in ry, i in rx
+                    xc, yc, _ = cell_center(plo_p, dx_p, i, j, k)
+                    r_arr[i, j, k, 1] = -cos(xc) * sin(0.5 * yc)
+                end
+            end
+            solve_cell_poisson_mlmg!(
+                sol_p, rhs_p, geom_p, box_array(amr_p, Int32(0)), dmap(amr_p, Int32(0));
+                is_periodic = (true, false, true), hidden_direction = 2,
+                subtract_mean = false, reltol = 1.0e-10,
+            )
+            @test isfinite(norm2(sol_p, 0, geom_p))
         finally
             parallel_barrier()
             if parallel_ioprocessor()

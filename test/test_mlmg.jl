@@ -163,4 +163,41 @@
             @test max_val(nd_sol, Int32(0), Int32(0)) > 0.05
         end
     end
+
+    @testset "solve_cell_poisson_mlmg! Periodic Helper" begin
+        let
+            amr = build_amrcore((32, 32, 1), (0.0, 0.0, 0.0), (2π, 2π, 1.0); is_periodic = (true, true, true))
+            geom = geometry(amr, 0)
+            ba = box_array(amr, Int32(0))
+            dm = dmap(amr, Int32(0))
+            rhs = allocate_cell_mf(amr, 0, 1, 0)
+            sol = allocate_cell_mf(amr, 0, 1, 1; init_val = 0.0)
+            dx = cell_sizes(geom)
+            plo = prob_lo_tuple(geom)
+
+            each_fab(rhs) do _, vbx, r_arr
+                rx, ry, rz = bounds(vbx)
+                for k in rz, j in ry, i in rx
+                    xc, yc, _ = cell_center(plo, dx, i, j, k)
+                    r_arr[i, j, k, 1] = -sin(xc) * cos(yc)
+                end
+            end
+
+            solve_cell_poisson_mlmg!(
+                sol, rhs, geom, ba, dm;
+                is_periodic = (true, true, true), hidden_direction = 2,
+                subtract_mean = true, reltol = 1.0e-11,
+            )
+
+            max_err = 0.0
+            each_fab(sol) do _, vbx, s_arr
+                rx, ry, rz = bounds(vbx)
+                for k in rz, j in ry, i in rx
+                    xc, yc, _ = cell_center(plo, dx, i, j, k)
+                    max_err = max(max_err, abs(s_arr[i, j, k, 1] - 0.5 * sin(xc) * cos(yc)))
+                end
+            end
+            @test max_err < 2.0e-3
+        end
+    end
 end

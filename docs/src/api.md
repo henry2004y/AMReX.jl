@@ -5,11 +5,13 @@
 ```@docs
 AMReX
 amrex_init
+ensure_amrex_init
 amrex_initialized
 amrex_finalize
 set_amrex_prefix!
 mpi_rank
 parallel_reduce_sum
+MPIDistVector
 ```
 
 ## Index Space, Geometry & Domain Decomposition
@@ -25,14 +27,25 @@ prob_lo_tuple
 prob_hi_tuple
 BoxArray
 nodal_box_array
+face_box_array
 DistributionMapping
 ```
 
-## `MultiFab`, `iMultiFab` & Zero-Copy Iterators
+## `MultiFab`, `iMultiFab`, Scratch Pool & Zero-Copy Iterators
 
 ```@docs
 MultiFab
 iMultiFab
+allocate_cell_mf
+allocate_face_mf
+allocate_node_mf
+allocate_cell_imf
+allocate_node_imf
+ScratchMultiFabPool
+checkout_scratch_mf!
+release_scratch_mf!
+with_scratch_mf!
+invalidate_scratch_pool!
 array4
 iarray4
 each_fab
@@ -55,6 +68,10 @@ TagVal
 TagBoxArray
 tag_array4
 AmrCore
+build_amrcore
+n_levels
+cache_level_geometries
+cell_center
 ref_ratio_tuple
 add_tag_box!
 on_error_est!
@@ -110,6 +127,7 @@ set_sigma!
 comp_divergence!
 update_velocity!
 solve!
+solve_cell_poisson_mlmg!
 get_grad_solution!
 get_fluxes!
 comp_residual!

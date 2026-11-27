@@ -32,6 +32,7 @@ const AMREX_SUITES = [
     ("multifab", "test_multifab.jl"),
     ("mlmg", "test_mlmg.jl"),
     ("particles_io", "test_particles_io.jl"),
+    ("utilities", "test_utilities.jl"),
 ]
 
 const ACTIVE_AMREX_SUITES = filter(s -> should_run_suite(s[1], TEST_FILTERS), AMREX_SUITES)
