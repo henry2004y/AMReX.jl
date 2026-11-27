@@ -650,3 +650,192 @@ Return the 0-based box index of the current `JlMFIter`, `MFIterHandle`, `TileHan
 Perform an MPI global sum reduction (`ParallelDescriptor::ReduceRealSum`) on `x`.
 """
 @inline parallel_reduce_sum(x::Real) = parallel_reduce_sum_real(Float64(x))
+
+"""
+    n_levels(amr::JlAmrCore) -> Int
+
+Return the current active number of AMR levels (`Int(finest_level(amr)) + 1`).
+"""
+@inline n_levels(amr::JlAmrCore)::Int = Int(finest_level(amr)) + 1
+
+"""
+    cache_level_geometries(amr::JlAmrCore) -> Vector{JlGeometryAllocated}
+
+Pre-fetch and cache immutable `Geometry` handles for levels `0:max_level(amr)`,
+eliminating per-call CxxWrap finalizer allocations from `geometry(amr, lev)`.
+"""
+function cache_level_geometries(amr::JlAmrCore)::Vector{JlGeometryAllocated}
+    nmax = Int(max_level(amr)) + 1
+    return [geometry(amr, Int32(l)) for l in 0:(nmax - 1)]
+end
+
+"""
+    build_amrcore(n_cells, prob_lo, prob_hi; max_level=0, coord=0,
+                  is_periodic=(true, true, true), max_grid_size=16,
+                  blocking_factor=4, ref_ratio=(2, 2, 2), grid_eff=0.7,
+                  n_error_buf=1, refine_boxes=NTuple{6, Float64}[],
+                  init=true) -> JlAmrCoreAllocated
+
+Construct a `JlAmrCoreAllocated` hierarchy handling Fake-1D (`ny == 1 && nz == 1`) and
+Fake-2D (`nz == 1`) clamping of `max_grid_size`, `blocking_factor` (via `gcd`), and
+`ref_ratio`, optionally tagging static `refine_boxes` and calling `init_from_scratch!`.
+"""
+function build_amrcore(
+        n_cells::NTuple{3, Integer},
+        prob_lo::NTuple{3, Real},
+        prob_hi::NTuple{3, Real};
+        max_level::Integer = 0,
+        coord::Integer = 0,
+        is_periodic::NTuple{3, Bool} = (true, true, true),
+        max_grid_size::Union{Integer, NTuple{3, Integer}} = 16,
+        blocking_factor::Union{Integer, NTuple{3, Integer}} = 4,
+        ref_ratio::Union{Integer, NTuple{3, Integer}} = (2, 2, 2),
+        grid_eff::Real = 0.7,
+        n_error_buf::Integer = 1,
+        refine_boxes::AbstractVector{<:NTuple{6, Real}} = NTuple{6, Float64}[],
+        init::Bool = true,
+    )
+    ensure_amrex_init()
+    nc = (Int(n_cells[1]), Int(n_cells[2]), Int(n_cells[3]))
+    fake_1d = (nc[2] == 1 && nc[3] == 1)
+    fake_2d = (nc[3] == 1)
+
+    mgs = max_grid_size isa Integer ?
+        (Int(max_grid_size), fake_1d ? 1 : Int(max_grid_size), fake_2d ? 1 : Int(max_grid_size)) :
+        (Int(max_grid_size[1]), fake_1d ? 1 : Int(max_grid_size[2]), fake_2d ? 1 : Int(max_grid_size[3]))
+
+    bf_raw = blocking_factor isa Integer ?
+        (Int(blocking_factor), Int(blocking_factor), Int(blocking_factor)) :
+        (Int(blocking_factor[1]), Int(blocking_factor[2]), Int(blocking_factor[3]))
+    bf = (
+        min(bf_raw[1], max(1, gcd(nc[1], bf_raw[1]))),
+        fake_1d ? 1 : min(bf_raw[2], max(1, gcd(nc[2], bf_raw[2]))),
+        fake_2d ? 1 : min(bf_raw[3], max(1, gcd(nc[3], bf_raw[3]))),
+    )
+
+    rb = RealBox(
+        Float64(prob_lo[1]), Float64(prob_lo[2]), Float64(prob_lo[3]),
+        Float64(prob_hi[1]), Float64(prob_hi[2]), Float64(prob_hi[3]),
+    )
+    amr = AmrCore(
+        rb, nc;
+        max_level = max_level,
+        coord = coord,
+        is_periodic = is_periodic,
+        max_grid_size = mgs,
+        blocking_factor = bf,
+        grid_eff = grid_eff,
+        ref_ratio = ref_ratio,
+        n_error_buf = n_error_buf,
+    )
+    for b in refine_boxes
+        add_tag_box!(amr, b[1], b[2], b[3], b[4], b[5], b[6])
+    end
+    init && init_from_scratch!(amr, 0.0)
+    return amr
+end
+
+"""
+    face_box_array(ba::JlBoxArray, dir::Integer) -> JlBoxArrayAllocated
+    face_box_array(amr::JlAmrCore, lev::Integer, dir::Integer) -> JlBoxArrayAllocated
+
+Return the face-centered `BoxArray` along 1-based direction `dir ∈ (1, 2, 3)`.
+"""
+@inline function face_box_array(ba::JlBoxArray, dir::Integer)
+    dirs = (dir == 1, dir == 2, dir == 3)
+    return nodal_box_array(ba; dirs = dirs)
+end
+
+@inline function face_box_array(amr::JlAmrCore, lev::Integer, dir::Integer)
+    return face_box_array(box_array(amr, Int32(lev)), dir)
+end
+
+"""
+    cell_center(plo::NTuple{3, Float64}, dx::NTuple{3, Float64}, i::Int, j::Int, k::Int) -> NTuple{3, Float64}
+
+Compute physical coordinates of the center of 0-based AMReX cell `(i, j, k)`.
+"""
+@inline function cell_center(
+        plo::NTuple{3, Float64}, dx::NTuple{3, Float64}, i::Int, j::Int, k::Int
+    )::NTuple{3, Float64}
+    return (
+        plo[1] + (i + 0.5) * dx[1],
+        plo[2] + (j + 0.5) * dx[2],
+        plo[3] + (k + 0.5) * dx[3],
+    )
+end
+
+"""
+    allocate_cell_mf(amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost = 0; init_val = 0.0) -> JlMultiFabAllocated
+
+Allocate a cell-centered `MultiFab` on level `lev` of `amr` and initialize to `init_val`.
+"""
+function allocate_cell_mf(
+        amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0;
+        init_val::Float64 = 0.0,
+    )::JlMultiFabAllocated
+    l = Int32(lev)
+    mf = MultiFab(box_array(amr, l), dmap(amr, l), ncomp, nghost)
+    set_val!(mf, init_val)
+    return mf
+end
+
+"""
+    allocate_face_mf(amr::JlAmrCore, lev::Integer, dir::Integer, ncomp::Integer, nghost = 0; init_val = 0.0) -> JlMultiFabAllocated
+
+Allocate a `dir`-face-centered `MultiFab` on level `lev` of `amr` and initialize to `init_val`.
+"""
+function allocate_face_mf(
+        amr::JlAmrCore, lev::Integer, dir::Integer, ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0;
+        init_val::Float64 = 0.0,
+    )::JlMultiFabAllocated
+    l = Int32(lev)
+    mf = MultiFab(face_box_array(amr, lev, dir), dmap(amr, l), ncomp, nghost)
+    set_val!(mf, init_val)
+    return mf
+end
+
+"""
+    allocate_node_mf(amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost = 0; init_val = 0.0) -> JlMultiFabAllocated
+
+Allocate a node-centered `MultiFab` on level `lev` of `amr` and initialize to `init_val`.
+"""
+function allocate_node_mf(
+        amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0;
+        init_val::Float64 = 0.0,
+    )::JlMultiFabAllocated
+    l = Int32(lev)
+    mf = MultiFab(node_box_array(amr, l), dmap(amr, l), ncomp, nghost)
+    set_val!(mf, init_val)
+    return mf
+end
+
+"""
+    allocate_cell_imf(amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost = 0; init_val = Int32(0)) -> JliMultiFabAllocated
+
+Allocate a cell-centered `iMultiFab` on level `lev` of `amr` and initialize to `init_val`.
+"""
+function allocate_cell_imf(
+        amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0;
+        init_val::Int32 = Int32(0),
+    )::JliMultiFabAllocated
+    l = Int32(lev)
+    imf = iMultiFab(box_array(amr, l), dmap(amr, l), ncomp, nghost)
+    set_val!(imf, init_val)
+    return imf
+end
+
+"""
+    allocate_node_imf(amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost = 0; init_val = Int32(0)) -> JliMultiFabAllocated
+
+Allocate a node-centered `iMultiFab` on level `lev` of `amr` and initialize to `init_val`.
+"""
+function allocate_node_imf(
+        amr::JlAmrCore, lev::Integer, ncomp::Integer, nghost::Union{Integer, NTuple{3, Integer}} = 0;
+        init_val::Int32 = Int32(0),
+    )::JliMultiFabAllocated
+    l = Int32(lev)
+    imf = iMultiFab(node_box_array(amr, l), dmap(amr, l), ncomp, nghost)
+    set_val!(imf, init_val)
+    return imf
+end

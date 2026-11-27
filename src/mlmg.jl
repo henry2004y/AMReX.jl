@@ -529,3 +529,52 @@ function apply!(
     apply_staged!(mlmg)
     return nothing
 end
+
+"""
+    solve_cell_poisson_mlmg!(sol_cc::JlMultiFab, rhs_cc::JlMultiFab, geom, ba, dm;
+                             is_periodic = (true, true, true), hidden_direction = -1,
+                             subtract_mean = false, reltol = 1e-10, abstol = 0.0, verbose = 0)
+
+Solve the cell-centered Poisson problem `∇² φ = rhs_cc` using `MLPoisson` and `MLMG`.
+When `subtract_mean = true` (required for purely periodic solvability), subtracts the global
+MPI-reduced mean from `rhs_cc` before invoking `MLMG`.
+"""
+function solve_cell_poisson_mlmg!(
+        sol_cc::JlMultiFab,
+        rhs_cc::JlMultiFab,
+        geom::JlGeometry,
+        ba::JlBoxArray,
+        dm::JlDistributionMapping;
+        is_periodic::NTuple{3, Bool} = (true, true, true),
+        hidden_direction::Integer = -1,
+        subtract_mean::Bool = false,
+        reltol::Real = 1.0e-10,
+        abstol::Real = 0.0,
+        verbose::Integer = 0,
+    )
+    if subtract_mean
+        loc_sum = 0.0
+        loc_cnt = Int64(0)
+        each_fab(rhs_cc) do _, vbx, arr
+            rx, ry, rz = bounds(vbx)
+            @inbounds for k in rz, j in ry, i in rx
+                loc_sum += arr[i, j, k, 1]
+                loc_cnt += 1
+            end
+        end
+        glob_sum = Float64(parallel_reduce_sum_real(loc_sum))
+        glob_cnt = Int64(parallel_reduce_sum_long(loc_cnt))
+        mean_rhs = glob_sum / max(Int64(1), glob_cnt)
+        plus_val!(rhs_cc, -mean_rhs, Int32(0), Int32(1), Int32(0))
+    end
+
+    info = LPInfo(; hidden_direction = Int(hidden_direction))
+    poisson = MLPoisson(geom, ba, dm; info = info)
+    bc_lo = ntuple(d -> is_periodic[d] ? LOPeriodic : LODirichlet, 3)
+    set_domain_bc!(poisson, bc_lo, bc_lo)
+    set_level_bc!(poisson, 0, nothing)
+
+    mlmg = MLMG(poisson; verbose = Int(verbose))
+    solve!(mlmg, sol_cc, rhs_cc; reltol = Float64(reltol), abstol = Float64(abstol))
+    return sol_cc
+end

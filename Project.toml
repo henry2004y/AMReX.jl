@@ -7,21 +7,26 @@ authors = ["Hongyang Zhou"]
 AMReX_jll = "9b6a1cb2-ee7e-5f22-a98b-ab382f85f133"
 CxxWrap = "1f15a43c-97ca-5a2a-ae31-89f07a497df4"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 Preferences = "21216c6a-2e73-6563-6e65-726566657250"
 Scratch = "6c6a2e73-6563-6170-7368-637461726353"
 
 [weakdeps]
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Krylov = "ba0b0d4f-ebba-5204-a429-3ac8c609bfb7"
 
 [extensions]
 AMReXCUDAExt = "CUDA"
+AMReXKrylovExt = "Krylov"
 
 [compat]
 AMReX_jll = "26.7"
 Aqua = "0.8"
 CUDA = "5, 6"
 CxxWrap = "0.17"
+Krylov = "0.10"
+LinearAlgebra = "1"
 PrecompileTools = "1.2"
 Preferences = "1.4"
 Scratch = "1"
@@ -29,7 +34,9 @@ julia = "1.11"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+Krylov = "ba0b0d4f-ebba-5204-a429-3ac8c609bfb7"
+LinearOperators = "5c8ed15e-5a4c-59e4-a42b-c7e8811fb125"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Aqua"]
+test = ["Test", "Aqua", "Krylov", "LinearOperators"]

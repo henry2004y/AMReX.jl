@@ -15,6 +15,7 @@ module AMReX
 using AMReX_jll
 using CxxWrap
 using Libdl
+using LinearAlgebra: LinearAlgebra, dot
 using PrecompileTools: @setup_workload, @compile_workload
 using Preferences
 using Scratch
@@ -200,10 +201,12 @@ end
 include("box_geometry.jl")
 include("multifab.jl")
 include("amrcore.jl")
+include("scratch_pool.jl")
 include("flux_register.jl")
 include("mlmg.jl")
 include("particles.jl")
 include("io.jl")
+include("mpi_vector.jl")
 
 function __init__()
     # Only load AMReX_jll library directories when using the default JLL build
@@ -361,6 +364,18 @@ Initialize the AMReX runtime and MPI communicator if not already initialized.
 amrex_init() = amrex_init(false)
 
 """
+    ensure_amrex_init()
+
+Initialize the AMReX runtime and MPI communicator if not already initialized.
+"""
+function ensure_amrex_init()
+    if !amrex_initialized()
+        amrex_init(false)
+    end
+    return nothing
+end
+
+"""
     amrex_initialized() -> Bool
 
 Return `true` if the AMReX runtime is currently initialized.
@@ -374,24 +389,27 @@ Finalize the AMReX runtime and release global AMReX arenas and resources.
 """
 function amrex_finalize end
 
-export amrex_init, amrex_initialized, amrex_finalize
+export amrex_init, ensure_amrex_init, amrex_initialized, amrex_finalize
 export is_gpu_build, is_device_accessible, device_array4, sync_amrex_gpu_stream!
 export parallel_myproc, parallel_nprocs, parallel_ioprocessor, parallel_barrier
 export parallel_reduce_sum_real, parallel_reduce_max_real, parallel_reduce_min_real
 export parallel_reduce_sum_long, parallel_reduce_sum_real_vec!
 export PARALLEL_ANY_SOURCE, MPIRequestBuffer, ensure_requests!, parallel_irecv!, parallel_isend!, parallel_waitall!, parallel_allgather!
+export MPIDistVector
 
 export JlBox, JlBoxAllocated, Box, IndexBox, bounds, lo, hi, is_nodal, num_pts, is_empty, contains
 export surrounding_nodes, enclosed_cells, grow, coarsen, refine, shift, intersects, intersect
 export JlRealBox, JlRealBoxAllocated, RealBox
 export JlGeometry, JlGeometryAllocated, Geometry, cell_size, inv_cell_size, prob_lo, prob_hi, domain, prob_domain, is_periodic
 export cell_sizes, inv_cell_sizes, prob_lo_tuple, prob_hi_tuple
-export JlBoxArray, JlBoxArrayAllocated, BoxArray, max_size!, convert_to_nodal, nodal_box_array, get_box, contains_cell, coarsenable
+export JlBoxArray, JlBoxArrayAllocated, BoxArray, max_size!, convert_to_nodal, nodal_box_array, face_box_array, get_box, contains_cell, coarsenable
 export JlDistributionMapping, JlDistributionMappingAllocated, DistributionMapping, get_rank, make_knapsack_dmap, make_sfc_dmap
 
 export JlMultiFab, JlMultiFabAllocated, MultiFab, JliMultiFab, JliMultiFabAllocated, iMultiFab
 export JlMFIter, JlMFIterAllocated, MFIterHandle, TileHandle, Array4View
 export n_comp, n_grow, local_size, box_array, dmap
+export allocate_cell_mf, allocate_face_mf, allocate_node_mf, allocate_cell_imf, allocate_node_imf
+export ScratchMultiFabPool, checkout_scratch_mf!, release_scratch_mf!, with_scratch_mf!, invalidate_scratch_pool!
 export set_val!, set_val_comp!, plus_val!, mult_val!, add_from!, copy_from!, parallel_copy_from!, parallel_copy!
 export copy!, plus!, scale!, saxpy!, lincomb!, dot_mf
 export fill_boundary!, fill_boundary_comp!, fill_boundary_nowait!, fill_boundary_finish!, sum_boundary!, sum_boundary_comp!
@@ -399,7 +417,8 @@ export min_val, max_val, norm0, norm1, norm2, sum_val
 export is_valid, next!, close!, index, grid_index, local_tile_index, valid_box, tile_box, fab_box
 export fab_lo, fab_hi, ifab_lo, ifab_hi, tfab_lo, tfab_hi, array4, iarray4, tag_array4, each_fab, each_fab_threaded
 
-export JlAmrCore, JlAmrCoreAllocated, AmrCore, InterpType, CellConservativeLinear, NodeBilinear, PiecewiseConstant, CellQuadratic
+export JlAmrCore, JlAmrCoreAllocated, AmrCore, build_amrcore, cache_level_geometries, n_levels, cell_center
+export InterpType, CellConservativeLinear, NodeBilinear, PiecewiseConstant, CellQuadratic
 export MathBCType, BCBogus, BCReflectOdd, BCIntDir, BCReflectEven, BCFOExtrap, BCExtDir, BCHOExtrap, BCHOExtrapCC, BCExtDirCC
 export JlBCRec, JlBCRecAllocated, BCRec, set_lo!, set_hi!, fill_domain_boundary!
 export JlTagBoxArray, JlTagBoxArrayAllocated, TagBoxArray, TagBoxArrayHandle, TagVal, TagClear, TagBuf, TagSet
@@ -432,7 +451,7 @@ export set_sigma!, set_gauss_seidel!, set_harmonic_average!, comp_divergence!, u
 export set_bottom_verbose!, set_max_iter!, set_max_fmg_iter!, set_fixed_iter!, set_pre_smooth!, set_post_smooth!, set_final_smooth!, set_bottom_smooth!
 export set_bottom_solver!, set_bottom_max_iter!, set_bottom_tolerance!, set_bottom_tolerance_abs!, set_final_fill_bc!
 export num_amr_levels, get_init_residual, get_final_residual, get_init_rhs
-export solve!, get_grad_solution!, get_fluxes!, comp_residual!, apply!
+export solve!, get_grad_solution!, get_fluxes!, comp_residual!, apply!, solve_cell_poisson_mlmg!
 
 export JlParticleContainer, JlParticleContainerAllocated, ParticleContainer
 export JlParIter, JlParIterAllocated, ParIterHandle, PtrVector, SoATileViews
@@ -465,6 +484,10 @@ export vismf_write, vismf_read!, vismf_exist, set_amrex_prefix!
         end
         ibx = IndexBox((0, 0, 0), (1, 1, 1), (false, false, false))
         _ = bounds(ibx)
+        pool = ScratchMultiFabPool()
+        _ = invalidate_scratch_pool!(pool)
+        dv = MPIDistVector([1.0, 2.0])
+        _ = copy(dv)
     end
 end
 

@@ -2,6 +2,19 @@
 # Plotfile, HDF5 & VisMF Checkpoint/Restart High-Level Wrappers
 # ============================================================================
 
+function _ensure_plotfile_parent_dir(filename::AbstractString)
+    parent = Base.dirname(abspath(String(filename)))
+    if amrex_initialized() && parallel_nprocs() > 1
+        if parallel_ioprocessor()
+            mkpath(parent)
+        end
+        parallel_barrier()
+    else
+        mkpath(parent)
+    end
+    return nothing
+end
+
 function _stage_multilevel_plotfile!(
         mfs::AbstractVector{<:JlMultiFab},
         geoms::AbstractVector{<:JlGeometry},
@@ -33,6 +46,7 @@ function write_plotfile(
         filename::AbstractString, mf::JlMultiFab, geom::JlGeometry;
         varnames::Vector{String} = String[], time::Real = 0.0, step::Integer = 0
     )
+    _ensure_plotfile_parent_dir(filename)
     csv = join(varnames, ",")
     write_single_level_plotfile(String(filename), mf, csv, geom, Float64(time), Int32(step))
     return filename
@@ -58,6 +72,7 @@ function write_plotfile(
         ref_ratio::Union{NTuple{3, Integer}, AbstractVector{<:NTuple{3, Integer}}} = (2, 2, 2)
     )
     isempty(mfs) && throw(ArgumentError("mfs must not be empty"))
+    _ensure_plotfile_parent_dir(filename)
     csv = join(varnames, ",")
     if length(mfs) == 1
         st = step isa Integer ? Int32(step) : Int32(step[1])
@@ -67,6 +82,37 @@ function write_plotfile(
         write_staged_multilevel_plotfile(String(filename), csv, Float64(time))
     end
     return filename
+end
+
+"""
+    write_plotfile(filename::AbstractString,
+                   mfs::AbstractVector{<:JlMultiFab},
+                   amr::JlAmrCore;
+                   varnames::AbstractVector{<:AbstractString}=String[],
+                   time::Real=0.0,
+                   step::Union{Integer, AbstractVector{<:Integer}}=0)
+
+Write a single-level or multi-level AMReX plotfile for `mfs` using geometry and
+refinement ratios from `amr`.
+"""
+function write_plotfile(
+        filename::AbstractString,
+        mfs::AbstractVector{<:JlMultiFab},
+        amr::JlAmrCore;
+        varnames::AbstractVector{<:AbstractString} = String[],
+        time::Real = 0.0,
+        step::Union{Integer, AbstractVector{<:Integer}} = 0,
+    )
+    nlev = length(mfs)
+    geoms = [geometry(amr, lev) for lev in 0:(nlev - 1)]
+    vnames = String.(varnames)
+    if nlev == 1
+        st = step isa Integer ? Int(step) : Int(step[1])
+        return write_plotfile(filename, mfs[1], geoms[1]; varnames = vnames, time = time, step = st)
+    else
+        rrs = [ref_ratio_tuple(amr, lev) for lev in 0:(nlev - 2)]
+        return write_plotfile(filename, mfs, geoms; varnames = vnames, time = time, step = step, ref_ratio = rrs)
+    end
 end
 
 """
@@ -81,6 +127,7 @@ function write_plotfile_hdf5(
         varnames::Vector{String} = String[], time::Real = 0.0, step::Integer = 0,
         compression::AbstractString = "None@0"
     )
+    _ensure_plotfile_parent_dir(filename)
     csv = join(varnames, ",")
     write_single_level_plotfile_hdf5(String(filename), mf, csv, geom, Float64(time), Int32(step), String(compression))
     return filename
@@ -107,6 +154,7 @@ function write_plotfile_hdf5(
         compression::AbstractString = "None@0"
     )
     isempty(mfs) && throw(ArgumentError("mfs must not be empty"))
+    _ensure_plotfile_parent_dir(filename)
     csv = join(varnames, ",")
     if length(mfs) == 1
         st = step isa Integer ? Int32(step) : Int32(step[1])
