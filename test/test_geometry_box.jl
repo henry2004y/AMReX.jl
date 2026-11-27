@@ -226,7 +226,7 @@
             cmf_old = MultiFab(ba0, dm0, 1, 1); set_val!(cmf_old, 10.0)
             cmf_new = MultiFab(ba0, dm0, 1, 1); set_val!(cmf_new, 20.0)
             fmf_cur = MultiFab(ba1, dm1, 1, 1); set_val!(fmf_cur, 15.0)
-            dst_f   = MultiFab(ba1, dm1, 1, 1); set_val!(dst_f, 0.0)
+            dst_f = MultiFab(ba1, dm1, 1, 1); set_val!(dst_f, 0.0)
 
             fill_patch_two_levels!(
                 dst_f, 0.25,

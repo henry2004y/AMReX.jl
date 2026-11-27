@@ -43,8 +43,14 @@ function YAFluxRegister(amr::JlAmrCore, fine_lev::Integer, nvar::Integer)
     )
 end
 
+@inline crse_has_work(fr::JlYAFluxRegister, mfi::MFIterHandle)::Bool =
+    (@ccall $(_FN_YAFR_CRSE_HAS_WORK[])(fr.cpp_object::Ptr{Cvoid}, mfi.ptr::Ptr{Cvoid})::UInt8) != 0
+
+@inline fine_has_work(fr::JlYAFluxRegister, mfi::MFIterHandle)::Bool =
+    (@ccall $(_FN_YAFR_FINE_HAS_WORK[])(fr.cpp_object::Ptr{Cvoid}, mfi.ptr::Ptr{Cvoid})::UInt8) != 0
+
 """
-    crse_add!(fr::JlYAFluxRegister, mfi::JlMFIter,
+    crse_add!(fr::JlYAFluxRegister, mfi::Union{JlMFIter, MFIterHandle},
               flux::NTuple{3, JlMultiFab}, dx::NTuple{3, Real}, dt::Real;
               srccomp::Integer=0, destcomp::Integer=0, numcomp::Integer=1)
 
@@ -63,8 +69,22 @@ function crse_add!(
     return nothing
 end
 
+@inline function crse_add!(
+        fr::JlYAFluxRegister, mfi::MFIterHandle,
+        flux::NTuple{3, JlMultiFab}, dx::NTuple{3, Real}, dt::Real;
+        srccomp::Integer = 0, destcomp::Integer = 0, numcomp::Integer = 1
+    )
+    @ccall $(_FN_YAFR_CRSE_ADD[])(
+        fr.cpp_object::Ptr{Cvoid}, mfi.ptr::Ptr{Cvoid},
+        flux[1].cpp_object::Ptr{Cvoid}, flux[2].cpp_object::Ptr{Cvoid}, flux[3].cpp_object::Ptr{Cvoid},
+        Float64(dx[1])::Float64, Float64(dx[2])::Float64, Float64(dx[3])::Float64, Float64(dt)::Float64,
+        Int32(srccomp)::Int32, Int32(destcomp)::Int32, Int32(numcomp)::Int32
+    )::Cvoid
+    return nothing
+end
+
 """
-    fine_add!(fr::JlYAFluxRegister, mfi::JlMFIter,
+    fine_add!(fr::JlYAFluxRegister, mfi::Union{JlMFIter, MFIterHandle},
               flux::NTuple{3, JlMultiFab}, dx::NTuple{3, Real}, dt::Real;
               srccomp::Integer=0, destcomp::Integer=0, numcomp::Integer=1)
 
@@ -80,6 +100,20 @@ function fine_add!(
         Float64(dx[1]), Float64(dx[2]), Float64(dx[3]), Float64(dt),
         Int32(srccomp), Int32(destcomp), Int32(numcomp)
     )
+    return nothing
+end
+
+@inline function fine_add!(
+        fr::JlYAFluxRegister, mfi::MFIterHandle,
+        flux::NTuple{3, JlMultiFab}, dx::NTuple{3, Real}, dt::Real;
+        srccomp::Integer = 0, destcomp::Integer = 0, numcomp::Integer = 1
+    )
+    @ccall $(_FN_YAFR_FINE_ADD[])(
+        fr.cpp_object::Ptr{Cvoid}, mfi.ptr::Ptr{Cvoid},
+        flux[1].cpp_object::Ptr{Cvoid}, flux[2].cpp_object::Ptr{Cvoid}, flux[3].cpp_object::Ptr{Cvoid},
+        Float64(dx[1])::Float64, Float64(dx[2])::Float64, Float64(dx[3])::Float64, Float64(dt)::Float64,
+        Int32(srccomp)::Int32, Int32(destcomp)::Int32, Int32(numcomp)::Int32
+    )::Cvoid
     return nothing
 end
 
@@ -132,7 +166,7 @@ function EdgeFluxRegister(amr::JlAmrCore, fine_lev::Integer, nvar::Integer = 1)
 end
 
 """
-    crse_add!(efr::JlEdgeFluxRegister, mfi::JlMFIter,
+    crse_add!(efr::JlEdgeFluxRegister, mfi::Union{JlMFIter, MFIterHandle},
               E_crse::NTuple{3, JlMultiFab}, dt_crse::Real)
 
 Accumulate coarse edge-centered electric fields `(Ex, Ey, Ez)` for tile `mfi` into `efr`.
@@ -145,8 +179,20 @@ function crse_add!(
     return nothing
 end
 
+@inline function crse_add!(
+        efr::JlEdgeFluxRegister, mfi::MFIterHandle,
+        E_crse::NTuple{3, JlMultiFab}, dt_crse::Real
+    )
+    @ccall $(_FN_EFR_CRSE_ADD[])(
+        efr.cpp_object::Ptr{Cvoid}, mfi.ptr::Ptr{Cvoid},
+        E_crse[1].cpp_object::Ptr{Cvoid}, E_crse[2].cpp_object::Ptr{Cvoid}, E_crse[3].cpp_object::Ptr{Cvoid},
+        Float64(dt_crse)::Float64
+    )::Cvoid
+    return nothing
+end
+
 """
-    fine_add!(efr::JlEdgeFluxRegister, mfi::JlMFIter,
+    fine_add!(efr::JlEdgeFluxRegister, mfi::Union{JlMFIter, MFIterHandle},
               E_fine::NTuple{3, JlMultiFab}, dt_fine::Real)
 
 Accumulate fine edge-centered electric fields `(Ex, Ey, Ez)` for tile `mfi` into `efr`.
@@ -156,6 +202,18 @@ function fine_add!(
         E_fine::NTuple{3, JlMultiFab}, dt_fine::Real
     )
     fine_add!(efr, mfi, E_fine[1], E_fine[2], E_fine[3], Float64(dt_fine))
+    return nothing
+end
+
+@inline function fine_add!(
+        efr::JlEdgeFluxRegister, mfi::MFIterHandle,
+        E_fine::NTuple{3, JlMultiFab}, dt_fine::Real
+    )
+    @ccall $(_FN_EFR_FINE_ADD[])(
+        efr.cpp_object::Ptr{Cvoid}, mfi.ptr::Ptr{Cvoid},
+        E_fine[1].cpp_object::Ptr{Cvoid}, E_fine[2].cpp_object::Ptr{Cvoid}, E_fine[3].cpp_object::Ptr{Cvoid},
+        Float64(dt_fine)::Float64
+    )::Cvoid
     return nothing
 end
 

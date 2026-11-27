@@ -1,6 +1,104 @@
 # ============================================================================
-# Pure-SoA ParticleContainer, ParIter, and 64-bit idcpu Bit Manipulation
+# Pure-SoA ParticleContainer, ParIterHandle, PtrVector, & 64-bit idcpu
 # ============================================================================
+
+"""
+    PtrVector{T} <: DenseVector{T}
+
+Immutable, `isbits`, non-owning zero-allocation 1D vector view over a contiguous C++
+particle SoA buffer.
+
+**Lifetime contract**: `PtrVector` holds a raw pointer into AMReX's C++ arena and must
+never be stored across `redistribute!`, `resize_tile!`, `regrid_levels!`, or container destruction.
+"""
+struct PtrVector{T} <: DenseVector{T}
+    ptr::Ptr{T}
+    len::Int
+end
+
+@inline Base.IndexStyle(::Type{<:PtrVector}) = IndexLinear()
+@inline Base.size(v::PtrVector) = (v.len,)
+@inline Base.pointer(v::PtrVector) = v.ptr
+@inline Base.unsafe_convert(::Type{Ptr{T}}, v::PtrVector{T}) where {T} = v.ptr
+@inline Base.elsize(::Type{PtrVector{T}}) where {T} = sizeof(T)
+@inline Base.strides(::PtrVector) = (1,)
+
+@inline Base.@propagate_inbounds function Base.getindex(v::PtrVector{T}, i::Int) where {T}
+    @boundscheck checkbounds(v, i)
+    return unsafe_load(v.ptr, i)
+end
+
+@inline Base.@propagate_inbounds function Base.setindex!(v::PtrVector{T}, val, i::Int) where {T}
+    @boundscheck checkbounds(v, i)
+    unsafe_store!(v.ptr, convert(T, val), i)
+    return val
+end
+
+struct _CSoATileInfo
+    np::Int64
+    idcpu::Ptr{UInt64}
+    px::Ptr{Float64}
+    py::Ptr{Float64}
+    pz::Ptr{Float64}
+    n_real::Int32
+    n_int::Int32
+end
+
+"""
+    ParIterHandle
+
+Zero-allocation `isbits` handle to a thread-local pooled `PureSoAParIter` used inside `each_particle_tile`.
+"""
+struct ParIterHandle
+    ptr::Ptr{Cvoid}
+    slot::Ptr{Cvoid}
+end
+
+"""
+    SoATileViews{NR, NI}
+
+Immutable `isbits` bundle of all SoA particle tile pointers `(np, idcpu, px, py, pz, real, int)`
+fetched in a single C++ tile lookup with zero heap allocations.
+"""
+struct SoATileViews{NR, NI}
+    np::Int
+    idcpu::PtrVector{UInt64}
+    px::PtrVector{Float64}
+    py::PtrVector{Float64}
+    pz::PtrVector{Float64}
+    real::NTuple{NR, PtrVector{Float64}}
+    int::NTuple{NI, PtrVector{Int32}}
+end
+
+@inline _raw_pti(pti::ParIterHandle)::Ptr{Cvoid} = pti.ptr
+@inline _raw_pti(pti::JlParIter)::Ptr{Cvoid} =
+    @ccall $(_FN_JLPTI_RAW[])(pti.cpp_object::Ptr{Cvoid})::Ptr{Cvoid}
+
+@inline is_valid(pti::ParIterHandle)::Bool =
+    (@ccall $(_FN_PARITER_IS_VALID[])(pti.ptr::Ptr{Cvoid})::UInt8) != 0
+@inline next!(pti::ParIterHandle) =
+    (@ccall $(_FN_PARITER_NEXT[])(pti.ptr::Ptr{Cvoid})::Cvoid; nothing)
+@inline index(pti::ParIterHandle)::Int32 =
+    @ccall $(_FN_PARITER_INDEX[])(pti.ptr::Ptr{Cvoid})::Int32
+@inline local_tile_index(pti::ParIterHandle)::Int32 =
+    @ccall $(_FN_PARITER_LOCAL_TILE_INDEX[])(pti.ptr::Ptr{Cvoid})::Int32
+@inline num_particles(pti::ParIterHandle)::Int64 =
+    @ccall $(_FN_PARITER_NUM_PARTICLES[])(pti.ptr::Ptr{Cvoid})::Int64
+@inline valid_box(pti::ParIterHandle)::IndexBox =
+    IndexBox(@ccall $(_FN_PARITER_VALID_BOX[])(pti.ptr::Ptr{Cvoid})::_CBoxInfo)
+@inline tile_box(pti::ParIterHandle)::IndexBox =
+    IndexBox(@ccall $(_FN_PARITER_TILE_BOX[])(pti.ptr::Ptr{Cvoid})::_CBoxInfo)
+@inline resize_tile!(pti::ParIterHandle, new_size::Integer) =
+    (@ccall $(_FN_PARITER_RESIZE_TILE[])(pti.ptr::Ptr{Cvoid}, Int64(new_size)::Int64)::Cvoid; nothing)
+
+@inline function _acquire_pariter(pc::JlParticleContainer, lev::Integer)::ParIterHandle
+    return @ccall $(_FN_PARITER_ACQUIRE[])(pc.cpp_object::Ptr{Cvoid}, Int32(lev)::Int32)::ParIterHandle
+end
+
+@inline function _release_pariter(pti::ParIterHandle)
+    @ccall $(_FN_PARITER_RELEASE[])(pti.slot::Ptr{Cvoid})::Cvoid
+    return nothing
+end
 
 """
     pack_idcpu(id::Int64, cpu::Integer) -> UInt64
@@ -75,113 +173,224 @@ function ParticleContainer(
 end
 
 """
-    idcpu_vec(pti::JlParIter) -> Vector{UInt64}
+    idcpu_vec(pti::Union{JlParIter, ParIterHandle}) -> PtrVector{UInt64}
 
-Return a zero-copy 1D `Vector{UInt64}` view of the packed `idcpu` array on `pti`.
+Return a zero-allocation, zero-copy 1D `PtrVector{UInt64}` view of the packed `idcpu` array on `pti`.
 """
-@inline function idcpu_vec(pti::JlParIter)
-    np = Int(num_particles(pti))
-    ptr = idcpu_ptr(pti).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own = false)
+@inline function idcpu_vec(pti::Union{JlParIter, ParIterHandle})
+    raw = _raw_pti(pti)
+    np = Int(@ccall $(_FN_PARITER_NUM_PARTICLES[])(raw::Ptr{Cvoid})::Int64)
+    ptr = @ccall $(_FN_PARITER_IDCPU_PTR[])(raw::Ptr{Cvoid})::Ptr{UInt64}
+    return PtrVector{UInt64}(ptr, np)
 end
 
 """
-    pos_vecs(pti::JlParIter) -> NTuple{3, Vector{Float64}}
+    pos_vecs(pti::Union{JlParIter, ParIterHandle}) -> NTuple{3, PtrVector{Float64}}
 
-Return a tuple `(px, py, pz)` of zero-copy 1D `Vector{Float64}` views for the particle
-positions on `pti`.
+Return a tuple `(px, py, pz)` of zero-allocation 1D `PtrVector{Float64}` views for particle positions on `pti`.
 """
-@inline function pos_vecs(pti::JlParIter)
-    np = Int(num_particles(pti))
-    px = unsafe_wrap(Array, pos_ptr(pti, Int32(0)).cpp_object, (np,); own = false)
-    py = unsafe_wrap(Array, pos_ptr(pti, Int32(1)).cpp_object, (np,); own = false)
-    pz = unsafe_wrap(Array, pos_ptr(pti, Int32(2)).cpp_object, (np,); own = false)
+@inline function pos_vecs(pti::Union{JlParIter, ParIterHandle})
+    raw = _raw_pti(pti)
+    np = Int(@ccall $(_FN_PARITER_NUM_PARTICLES[])(raw::Ptr{Cvoid})::Int64)
+    px = PtrVector{Float64}(@ccall($(_FN_PARITER_POS_PTR[])(raw::Ptr{Cvoid}, Int32(0)::Int32)::Ptr{Float64}), np)
+    py = PtrVector{Float64}(@ccall($(_FN_PARITER_POS_PTR[])(raw::Ptr{Cvoid}, Int32(1)::Int32)::Ptr{Float64}), np)
+    pz = PtrVector{Float64}(@ccall($(_FN_PARITER_POS_PTR[])(raw::Ptr{Cvoid}, Int32(2)::Int32)::Ptr{Float64}), np)
     return (px, py, pz)
 end
 
 """
-    real_vec(pti::JlParIter, comp::Integer) -> Vector{Float64}
+    real_vec(pti::Union{JlParIter, ParIterHandle}, comp::Integer) -> PtrVector{Float64}
 
-Return a zero-copy 1D `Vector{Float64}` view of runtime real SoA component `comp` (1-based) on `pti`.
+Return a zero-allocation 1D `PtrVector{Float64}` view of runtime real SoA component `comp` (1-based) on `pti`.
 """
-@inline function real_vec(pti::JlParIter, comp::Integer)
-    np = Int(num_particles(pti))
-    ptr = real_ptr(pti, Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own = false)
+@inline function real_vec(pti::Union{JlParIter, ParIterHandle}, comp::Integer)
+    raw = _raw_pti(pti)
+    np = Int(@ccall $(_FN_PARITER_NUM_PARTICLES[])(raw::Ptr{Cvoid})::Int64)
+    ptr = @ccall $(_FN_PARITER_REAL_PTR[])(raw::Ptr{Cvoid}, Int32(comp - 1)::Int32)::Ptr{Float64}
+    return PtrVector{Float64}(ptr, np)
 end
 
 """
-    int_vec(pti::JlParIter, comp::Integer) -> Vector{Int32}
+    int_vec(pti::Union{JlParIter, ParIterHandle}, comp::Integer) -> PtrVector{Int32}
 
-Return a zero-copy 1D `Vector{Int32}` view of runtime integer SoA component `comp` (1-based) on `pti`.
+Return a zero-allocation 1D `PtrVector{Int32}` view of runtime integer SoA component `comp` (1-based) on `pti`.
 """
-@inline function int_vec(pti::JlParIter, comp::Integer)
-    np = Int(num_particles(pti))
-    ptr = int_ptr(pti, Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own = false)
+@inline function int_vec(pti::Union{JlParIter, ParIterHandle}, comp::Integer)
+    raw = _raw_pti(pti)
+    np = Int(@ccall $(_FN_PARITER_NUM_PARTICLES[])(raw::Ptr{Cvoid})::Int64)
+    ptr = @ccall $(_FN_PARITER_INT_PTR[])(raw::Ptr{Cvoid}, Int32(comp - 1)::Int32)::Ptr{Int32}
+    return PtrVector{Int32}(ptr, np)
 end
 
 """
-    tile_idcpu_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer) -> Vector{UInt64}
+    soa_views(pti::Union{JlParIter, ParIterHandle}, ::Val{NR}, ::Val{NI}) -> SoATileViews{NR, NI}
 
-Return a zero-copy 1D `Vector{UInt64}` view of the packed `idcpu` array on tile `(lev, grid_id, tile_id)`.
+Fetch particle count, `idcpu`, `(px, py, pz)`, `NR` real components, and `NI` integer components
+in a single zero-allocation C++ call.
+"""
+@inline function soa_views(pti::Union{JlParIter, ParIterHandle}, ::Val{NR}, ::Val{NI}) where {NR, NI}
+    raw = _raw_pti(pti)
+    info = @ccall $(_FN_PARITER_SOA_INFO[])(
+        raw::Ptr{Cvoid},
+        Ptr{Ptr{Float64}}(C_NULL)::Ptr{Ptr{Float64}}, Int32(0)::Int32,
+        Ptr{Ptr{Int32}}(C_NULL)::Ptr{Ptr{Int32}}, Int32(0)::Int32
+    )::_CSoATileInfo
+    np = Int(info.np)
+    real_vecs = ntuple(
+        c -> PtrVector{Float64}(@ccall($(_FN_PARITER_REAL_PTR[])(raw::Ptr{Cvoid}, Int32(c - 1)::Int32)::Ptr{Float64}), np),
+        Val(NR)
+    )
+    int_vecs = ntuple(
+        c -> PtrVector{Int32}(@ccall($(_FN_PARITER_INT_PTR[])(raw::Ptr{Cvoid}, Int32(c - 1)::Int32)::Ptr{Int32}), np),
+        Val(NI)
+    )
+    return SoATileViews{NR, NI}(
+        np,
+        PtrVector{UInt64}(info.idcpu, np),
+        PtrVector{Float64}(info.px, np),
+        PtrVector{Float64}(info.py, np),
+        PtrVector{Float64}(info.pz, np),
+        real_vecs,
+        int_vecs,
+    )
+end
+
+"""
+    tile_idcpu_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer) -> PtrVector{UInt64}
+
+Return a zero-allocation 1D `PtrVector{UInt64}` view of the packed `idcpu` array on tile `(lev, grid_id, tile_id)`.
 """
 @inline function tile_idcpu_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer)
-    np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
-    ptr = tile_idcpu_ptr(pc, Int32(lev), Int32(grid_id), Int32(tile_id)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own = false)
+    l, g, t = Int32(lev), Int32(grid_id), Int32(tile_id)
+    np = Int(@ccall $(_FN_TILE_NUM_PARTICLES[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32)::Int64)
+    ptr = @ccall $(_FN_TILE_IDCPU_PTR[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32)::Ptr{UInt64}
+    return PtrVector{UInt64}(ptr, np)
 end
 
 """
-    tile_pos_vecs(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer) -> NTuple{3, Vector{Float64}}
+    tile_pos_vecs(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer) -> NTuple{3, PtrVector{Float64}}
 
-Return `(px, py, pz)` zero-copy 1D `Vector{Float64}` views on tile `(lev, grid_id, tile_id)`.
+Return `(px, py, pz)` zero-allocation 1D `PtrVector{Float64}` views on tile `(lev, grid_id, tile_id)`.
 """
 @inline function tile_pos_vecs(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer)
-    np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
     l, g, t = Int32(lev), Int32(grid_id), Int32(tile_id)
-    px = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(0)).cpp_object, (np,); own = false)
-    py = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(1)).cpp_object, (np,); own = false)
-    pz = unsafe_wrap(Array, tile_pos_ptr(pc, l, g, t, Int32(2)).cpp_object, (np,); own = false)
-    return (px, py, pz)
+    info = @ccall $(_FN_TILE_SOA_INFO[])(
+        pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32,
+        Ptr{Ptr{Float64}}(C_NULL)::Ptr{Ptr{Float64}}, Int32(0)::Int32,
+        Ptr{Ptr{Int32}}(C_NULL)::Ptr{Ptr{Int32}}, Int32(0)::Int32
+    )::_CSoATileInfo
+    np = Int(info.np)
+    return (PtrVector{Float64}(info.px, np), PtrVector{Float64}(info.py, np), PtrVector{Float64}(info.pz, np))
 end
 
 """
-    tile_real_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer) -> Vector{Float64}
+    tile_real_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer) -> PtrVector{Float64}
 
-Return a zero-copy 1D `Vector{Float64}` view of runtime real component `comp` (1-based) on tile `(lev, grid_id, tile_id)`.
+Return a zero-allocation 1D `PtrVector{Float64}` view of runtime real component `comp` (1-based) on tile `(lev, grid_id, tile_id)`.
 """
 @inline function tile_real_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer)
-    np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
-    ptr = tile_real_ptr(pc, Int32(lev), Int32(grid_id), Int32(tile_id), Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own = false)
+    l, g, t = Int32(lev), Int32(grid_id), Int32(tile_id)
+    np = Int(@ccall $(_FN_TILE_NUM_PARTICLES[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32)::Int64)
+    ptr = @ccall $(_FN_TILE_REAL_PTR[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32, Int32(comp - 1)::Int32)::Ptr{Float64}
+    return PtrVector{Float64}(ptr, np)
 end
 
 """
-    tile_int_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer) -> Vector{Int32}
+    tile_int_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer) -> PtrVector{Int32}
 
-Return a zero-copy 1D `Vector{Int32}` view of runtime integer component `comp` (1-based) on tile `(lev, grid_id, tile_id)`.
+Return a zero-allocation 1D `PtrVector{Int32}` view of runtime integer component `comp` (1-based) on tile `(lev, grid_id, tile_id)`.
 """
 @inline function tile_int_vec(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer, comp::Integer)
-    np = Int(tile_num_particles(pc, Int32(lev), Int32(grid_id), Int32(tile_id)))
-    ptr = tile_int_ptr(pc, Int32(lev), Int32(grid_id), Int32(tile_id), Int32(comp - 1)).cpp_object
-    return unsafe_wrap(Array, ptr, (np,); own = false)
+    l, g, t = Int32(lev), Int32(grid_id), Int32(tile_id)
+    np = Int(@ccall $(_FN_TILE_NUM_PARTICLES[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32)::Int64)
+    ptr = @ccall $(_FN_TILE_INT_PTR[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32, Int32(comp - 1)::Int32)::Ptr{Int32}
+    return PtrVector{Int32}(ptr, np)
+end
+
+"""
+    tile_soa_views(pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer,
+                   ::Val{NR}, ::Val{NI}) -> SoATileViews{NR, NI}
+
+Fetch all SoA pointers for tile `(lev, grid_id, tile_id)` in a single `DefineAndReturnParticleTile` lookup.
+"""
+@inline function tile_soa_views(
+        pc::JlParticleContainer, lev::Integer, grid_id::Integer, tile_id::Integer,
+        ::Val{NR}, ::Val{NI}
+    ) where {NR, NI}
+    l, g, t = Int32(lev), Int32(grid_id), Int32(tile_id)
+    info = @ccall $(_FN_TILE_SOA_INFO[])(
+        pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32,
+        Ptr{Ptr{Float64}}(C_NULL)::Ptr{Ptr{Float64}}, Int32(0)::Int32,
+        Ptr{Ptr{Int32}}(C_NULL)::Ptr{Ptr{Int32}}, Int32(0)::Int32
+    )::_CSoATileInfo
+    np = Int(info.np)
+    real_vecs = ntuple(
+        c -> PtrVector{Float64}(@ccall($(_FN_TILE_REAL_PTR[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32, Int32(c - 1)::Int32)::Ptr{Float64}), np),
+        Val(NR)
+    )
+    int_vecs = ntuple(
+        c -> PtrVector{Int32}(@ccall($(_FN_TILE_INT_PTR[])(pc.cpp_object::Ptr{Cvoid}, l::Int32, g::Int32, t::Int32, Int32(c - 1)::Int32)::Ptr{Int32}), np),
+        Val(NI)
+    )
+    return SoATileViews{NR, NI}(
+        np,
+        PtrVector{UInt64}(info.idcpu, np),
+        PtrVector{Float64}(info.px, np),
+        PtrVector{Float64}(info.py, np),
+        PtrVector{Float64}(info.pz, np),
+        real_vecs,
+        int_vecs,
+    )
 end
 
 """
     each_particle_tile(f::Function, pc::JlParticleContainer, lev::Integer=0)
 
-Iterate over all active particle tiles at level `lev`, calling `f(pti)`.
+Iterate over all active particle tiles at level `lev` with zero heap allocations, calling `f(pti)`.
 """
 function each_particle_tile(f::F, pc::JlParticleContainer, lev::Integer = 0) where {F}
-    pti = JlParIter(pc, Int32(lev))
+    pti = _acquire_pariter(pc, lev)
     try
         while is_valid(pti)
             f(pti)
             next!(pti)
         end
     finally
-        close!(pti)
+        _release_pariter(pti)
+    end
+    return nothing
+end
+
+"""
+    each_particle_tile_threaded(f::Function, pc::JlParticleContainer, lev::Integer=0,
+                                ::Val{NR}=Val(4), ::Val{NI}=Val(1))
+
+Collect all active particle tiles `(gid, tid, views::SoATileViews{NR, NI})` on level `lev`
+and execute `f(gid, tid, views)` across Julia threads (`Threads.@threads :static`).
+"""
+function each_particle_tile_threaded(
+        f::F, pc::JlParticleContainer, lev::Integer = 0,
+        ::Val{NR} = Val(4), ::Val{NI} = Val(1)
+    ) where {F, NR, NI}
+    tiles = Vector{Tuple{Int32, Int32, SoATileViews{NR, NI}}}()
+    pti = _acquire_pariter(pc, lev)
+    try
+        while is_valid(pti)
+            push!(tiles, (index(pti), local_tile_index(pti), soa_views(pti, Val(NR), Val(NI))))
+            next!(pti)
+        end
+    finally
+        _release_pariter(pti)
+    end
+    if Threads.nthreads() <= 1
+        for (gid, tid, views) in tiles
+            f(gid, tid, views)
+        end
+    else
+        Threads.@threads :static for idx in eachindex(tiles)
+            gid, tid, views = @inbounds tiles[idx]
+            f(gid, tid, views)
+        end
     end
     return nothing
 end

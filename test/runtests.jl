@@ -55,10 +55,21 @@ if !isempty(ACTIVE_AMREX_SUITES)
     end
 end
 
+function _find_mpiexec()
+    jll_sym = Symbol(AMReX.AMReX_jll.MPIPreferences.binary)
+    if isdefined(AMReX.AMReX_jll, jll_sym)
+        mpi_jll = getfield(AMReX.AMReX_jll, jll_sym)
+        if isdefined(mpi_jll, :mpiexec)
+            return mpi_jll.mpiexec()
+        end
+    end
+    return Cmd([get(ENV, "JULIA_MPIEXEC", "mpiexec")])
+end
+
 if should_run_suite("mpi", TEST_FILTERS)
     @testset "2-Process MPI Subprocess Suite" begin
         mpi_test_script = joinpath(@__DIR__, "test_mpi.jl")
-        cmd = `$(AMReX.AMReX_jll.MPICH_jll.mpiexec()) -n 2 $(Base.julia_cmd()) --project=$(Base.active_project()) $mpi_test_script`
+        cmd = `$(_find_mpiexec()) -n 2 $(Base.julia_cmd()) --project=$(Base.active_project()) $mpi_test_script`
         @test success(pipeline(cmd; stdout = stdout, stderr = stderr))
     end
 end

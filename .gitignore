@@ -1,8 +1,10 @@
 Manifest.toml
+LocalPreferences.toml
 deps/build/
 deps/lib/
 *.o
 *.so
+*.cov
 plt*
 chk*
 Backtrace.*
@@ -12,5 +14,3 @@ docs/package.json
 docs/package-lock.json
 docs/Manifest.toml
 docs/src/.vitepress/
-
-
