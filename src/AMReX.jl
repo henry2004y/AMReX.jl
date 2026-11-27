@@ -15,8 +15,6 @@ module AMReX
 using AMReX_jll
 using CxxWrap
 using Libdl
-using MPIPreferences
-using OffsetArrays
 using PrecompileTools: @setup_workload, @compile_workload
 using Preferences
 using Scratch
@@ -92,15 +90,20 @@ end
 
 function _shim_scratch_dir(amrex_prefix::Union{Nothing, String})
     h = 0xcbf29ce484222325
-    meta = "$(VERSION.major).$(VERSION.minor)|$(something(amrex_prefix, ""))|$(Sys.ARCH)|$(Sys.KERNEL)|"
+    amrex_dir = amrex_prefix !== nothing ? amrex_prefix : (AMReX_jll.is_available() ? AMReX_jll.artifact_dir : "")
+    cxx = get(ENV, "CXX", "g++")
+    cxxwrap_dir = CxxWrap.prefix_path()
+    meta = "$(VERSION.major).$(VERSION.minor)|$(amrex_dir)|$(cxxwrap_dir)|$(cxx)|$(Sys.ARCH)|$(Sys.KERNEL)|"
     h = _fnv1a64_update(h, codeunits(meta))
-    for relpath in ("deps/cshim/amrex_jl_shim.cpp", "deps/build.jl")
+    for relpath in ("deps/cshim/amrex_jl_shim.cpp", "src/build_cshim.jl")
         p = joinpath(@__DIR__, "..", relpath)
         isfile(p) && (h = _fnv1a64_update(h, read(p)))
     end
     key = "cshim-jl$(VERSION.major).$(VERSION.minor)-$(string(h; base = 16, pad = 16))"
     return @get_scratch!(key)
 end
+
+include("build_cshim.jl")
 
 function get_shim_library_path()
     custom_lib = @load_preference("custom_shim_lib", nothing)
@@ -111,8 +114,7 @@ function get_shim_library_path()
     scratch_dir = _shim_scratch_dir(amrex_prefix)
     lib_path = joinpath(scratch_dir, "libamrex_jl_shim." * Libdl.dlext)
     if !isfile(lib_path)
-        include(joinpath(@__DIR__, "..", "deps", "build.jl"))
-        Base.invokelatest(build_cshim; custom_amrex_prefix = amrex_prefix, out_dir = scratch_dir)
+        build_cshim(; custom_amrex_prefix = amrex_prefix, out_dir = scratch_dir)
     end
     return lib_path
 end
@@ -127,8 +129,7 @@ build), and recompile the C++ shim library into `Scratch.jl` storage.
 function set_amrex_prefix!(amrex_prefix::Union{Nothing, String})
     @set_preferences!("amrex_prefix" => amrex_prefix)
     scratch_dir = _shim_scratch_dir(amrex_prefix)
-    include(joinpath(@__DIR__, "..", "deps", "build.jl"))
-    Base.invokelatest(build_cshim; custom_amrex_prefix = amrex_prefix, out_dir = scratch_dir)
+    build_cshim(; custom_amrex_prefix = amrex_prefix, out_dir = scratch_dir)
     return @info "Updated AMReX prefix preference to $(something(amrex_prefix, "AMReX_jll default")). Restart Julia for changes to take effect."
 end
 
@@ -237,7 +238,7 @@ Return `true` when `mf` resides in GPU/device-accessible AMReX memory under an a
 @inline is_device_accessible(mf::JlMultiFab)::Bool =
     (@ccall $(_FN_IS_DEVICE_ACCESSIBLE[])(mf.cpp_object::Ptr{Cvoid})::UInt8) != 0
 
-# Extension hooks implemented by AMReXCUDAExt when CUDA.jl + KernelAbstractions.jl are loaded
+# Extension hooks implemented by AMReXCUDAExt when CUDA.jl is loaded
 function device_array4 end
 function sync_amrex_gpu_stream! end
 

@@ -2,7 +2,6 @@ module AMReXCUDAExt
 
 using AMReX
 using CUDA
-using KernelAbstractions
 
 """
     AMReX.device_array4(mf::AMReX.JlMultiFab, mfi::Union{AMReX.JlMFIter, AMReX.MFIterHandle, AMReX.TileHandle})

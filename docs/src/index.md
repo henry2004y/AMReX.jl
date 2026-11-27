@@ -5,7 +5,7 @@ layout: home
 hero:
   name: "AMReX.jl"
   text: "Block-Structured AMR in Julia"
-  tagline: "Zero-copy OffsetArray field views, pure-SoA particle containers, and multi-level adaptive mesh refinement powered by AMReX and CxxWrap.jl."
+  tagline: "Zero-copy Array4View field views, pure-SoA particle containers, and multi-level adaptive mesh refinement powered by AMReX and CxxWrap.jl."
   actions:
     - theme: brand
       text: Getting Started
@@ -15,7 +15,7 @@ hero:
       link: /api
 
 features:
-  - title: Zero-Copy 4D OffsetArray Views
+  - title: Zero-Copy 4D Array4View Views
     details: Access cell-centered and nodal MultiFab / iMultiFab FArrayBoxes directly with 0-based AMReX index ranges (rx, ry, rz, 1:ncomp) and zero heap allocations in inner loops.
   - title: Pure-SoA Particle Containers
     details: High-throughput Structure-of-Arrays (SoA) particle storage with 64-bit packed idcpu words, direct tile vector views, and multi-level MPI redistribution.
@@ -50,7 +50,7 @@ dm = DistributionMapping(ba)
 mf = MultiFab(ba, dm, 3, 1)
 set_val!(mf, 0.0)
 
-# 4. Populate fields using zero-copy 4D OffsetArray views
+# 4. Populate fields using zero-copy 4D Array4View views
 dx, dy, dz = cell_sizes(geom)
 each_fab(mf) do mfi, vbx, arr
     rx, ry, rz = bounds(vbx)

@@ -5,7 +5,6 @@ using Aqua
         AMReX;
         ambiguities = false,
         piracies = false,
-        stale_deps = false,
         persistent_tasks = false,
         deps_compat = (check_extras = false, ignore = [:Libdl])
     )

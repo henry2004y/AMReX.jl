@@ -13,7 +13,7 @@ using AMReX
 AMReX.set_amrex_prefix!("/opt/amrex-cuda")
 ```
 
-This writes a `LocalPreferences.toml` entry (`amrex_prefix`) in your active environment and invokes the configured C++ compiler (`ENV["CXX"]`, defaulting to `g++`) via `deps/build.jl` to compile `libamrex_jl_shim` into a per-(Julia version, prefix, architecture) `Scratch.jl` directory, without writing into the package source tree or leaking `AMReX_jll` (`MPICH_jll`) RPATHs.
+This writes a `LocalPreferences.toml` entry (`amrex_prefix`) in your active environment and invokes the configured C++ compiler (`ENV["CXX"]`, defaulting to `g++`) to compile `libamrex_jl_shim` into a `Scratch.jl` directory keyed by Julia version, AMReX prefix/artifact, `CxxWrap` prefix, compiler, and architecture, without writing into the package source tree or leaking `AMReX_jll` (`MPICH_jll`) RPATHs.
 
 You may also point directly to a prebuilt shim shared library via `Preferences.set_preferences!(AMReX, "custom_shim_lib" => "/path/to/libamrex_jl_shim.so")`.
 

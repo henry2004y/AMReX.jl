@@ -9,7 +9,7 @@
     return nothing
 end
 
-@testset "MultiFab, iMultiFab, Zero-Copy OffsetArrays & Halo Exchange" begin
+@testset "MultiFab, iMultiFab, Zero-Copy Array4Views & Halo Exchange" begin
     let
         bx = Box(0, 0, 0, 7, 7, 0)
         rb = RealBox(0.0, 0.0, 0.0, 8.0, 8.0, 1.0)

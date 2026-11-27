@@ -12,9 +12,9 @@ mf_cell = MultiFab(ba, dm, 3, (2, 2, 1))
 imf_status = iMultiFab(ba, dm, 1, 2)
 ```
 
-## Zero-Copy 4D `OffsetArray` Views
+## Zero-Copy 4D `Array4View` Views
 
-Inside an `each_fab` block, `AMReX.jl` wraps the raw C++ `FArrayBox` pointer in a 4D `OffsetArray{Float64, 4, Array{Float64, 4}}` without copying memory:
+Inside an `each_fab` block, `AMReX.jl` wraps the raw C++ `FArrayBox` pointer in an `isbits`, zero-allocation `Array4View{Float64}` (`AbstractArray{Float64, 4}`) without copying memory:
 
 - Spatial axes `axes(arr, 1)`, `axes(arr, 2)`, `axes(arr, 3)` use **0-based inclusive AMReX indices** (including ghost layers).
 - Component axis `axes(arr, 4)` uses **1-based Julia indices** `1:n_comp(mf)`.

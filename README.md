@@ -10,7 +10,7 @@ High-performance Julia bindings for the [AMReX](https://amrex-codes.github.io/am
 
 ## Key Features
 
-- **Zero-Copy 4D `OffsetArray` Views**: Access cell-centered, face-centered, edge-centered, and nodal `MultiFab`, `iMultiFab`, and `TagBoxArray` patches directly with 0-based AMReX index ranges `(rx, ry, rz, 1:ncomp)` and zero heap allocations in inner loops via `each_fab`.
+- **Zero-Copy 4D `Array4View`s**: Access cell-centered, face-centered, edge-centered, and nodal `MultiFab`, `iMultiFab`, and `TagBoxArray` patches directly with 0-based AMReX index ranges `(rx, ry, rz, 1:ncomp)` and zero heap allocations in inner loops via `each_fab`.
 - **Multi-Level `AmrCore` & Dynamic Error Tagging**: Manage hierarchical AMR grids with coarse-fine interpolation (`CellConservativeLinear`, `NodeBilinear`, `PiecewiseConstant`, `CellQuadratic`), physical boundary conditions (`BCRec`, `fill_domain_boundary!`), `FillPatchSingleLevel` / `FillPatchTwoLevels`, and dynamic regridding via `TagBoxArray` and Julia callbacks (`on_error_est!`, `tag_cells_by_value!`, `tag_cells_by_grad!`).
 - **Flux Registers & Staggered Averaging**: Enforce conservation and divergence/curl constraints across coarse-fine interfaces with `YAFluxRegister`, `EdgeFluxRegister`, `average_down!`, `average_down_nodal!`, `average_down_faces!`, and `average_down_edges!`.
 - **Multi-Level Linear Solvers (`MLMG`)**: Solve elliptic equations across single-level and multi-level AMR hierarchies using `MLPoisson`, `MLABecLaplacian`, and `MLNodeLaplacian` with configurable boundary conditions (`LinOpBCType`), bottom solvers (`BottomSolver`), gradients, and fluxes.
@@ -22,10 +22,10 @@ High-performance Julia bindings for the [AMReX](https://amrex-codes.github.io/am
 
 ```julia
 using Pkg
-Pkg.develop(path="/path/to/AMReX.jl")
+Pkg.add("AMReX")
 ```
 
-On first load (or via `julia --project=AMReX.jl AMReX.jl/deps/build.jl`), `AMReX.jl` compiles its lightweight C++ shim library (`deps/lib/libamrex_jl_shim.so`) against `AMReX_jll` and `libcxxwrap_julia_jll`.
+On first load, `AMReX.jl` compiles its lightweight C++20 shim library into `Scratch.jl` storage against `AMReX_jll` and `libcxxwrap_julia_jll`. This requires a C++20 compiler with OpenMP support (defaulting to `g++`, configurable via `ENV["CXX"]`), and is currently supported on Linux out of the box (for custom or GPU-enabled builds, see `set_amrex_prefix!`).
 
 To switch between the default `AMReX_jll` binary and a custom local AMReX installation via `Preferences.jl`:
 
@@ -110,3 +110,9 @@ julia --project=AMReX.jl -e 'using Pkg; Pkg.test(; test_args=["mlmg", "mpi"])'
 # Run the 2-rank MPI test script directly
 julia --project=AMReX.jl -e 'using AMReX_jll; run(`$(AMReX_jll.MPICH_jll.mpiexec()) -n 2 $(Base.julia_cmd()) --project=AMReX.jl AMReX.jl/test/test_mpi.jl`)'
 ```
+
+## License
+
+`AMReX.jl` is licensed under the [MIT License](LICENSE).
+
+The underlying [AMReX](https://amrex-codes.github.io/amrex/) C++ library distributed via [`AMReX_jll.jl`](https://github.com/JuliaBinaryWrappers/AMReX_jll.jl) is licensed under the **BSD-3-Clause License** (Copyright © The Regents of the University of California, through Lawrence Berkeley National Laboratory). `AMReX.jl` is an independent Julia package and is not endorsed by the University of California, Lawrence Berkeley National Laboratory, or the U.S. Department of Energy.

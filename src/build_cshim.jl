@@ -1,15 +1,28 @@
-using AMReX_jll
-using CxxWrap
-using Libdl
-
 function build_cshim(;
         custom_amrex_prefix::Union{Nothing, String} = nothing,
         out_dir::Union{Nothing, String} = nothing,
         cxx::String = get(ENV, "CXX", "g++")
     )
-    deps_dir = @__DIR__
-    src_file = joinpath(deps_dir, "cshim", "amrex_jl_shim.cpp")
-    lib_dir = something(out_dir, joinpath(deps_dir, "lib"))
+    if custom_amrex_prefix === nothing && !AMReX_jll.is_available()
+        throw(
+            ErrorException(
+                "AMReX_jll is not available on this platform. " *
+                    "Configure a local AMReX installation with AMReX.set_amrex_prefix!(prefix)."
+            )
+        )
+    end
+    if Sys.which(cxx) === nothing && !isfile(cxx)
+        throw(
+            ErrorException(
+                "C++ compiler '$cxx' not found. Compiling the AMReX C++ shim requires a C++20 " *
+                    "compiler with OpenMP support (set via ENV[\"CXX\"], defaulting to \"g++\")."
+            )
+        )
+    end
+
+    cshim_dir = joinpath(@__DIR__, "..", "deps", "cshim")
+    src_file = joinpath(cshim_dir, "amrex_jl_shim.cpp")
+    lib_dir = something(out_dir, _shim_scratch_dir(custom_amrex_prefix))
     mkpath(lib_dir)
     out_lib = joinpath(lib_dir, "libamrex_jl_shim." * Libdl.dlext)
 
@@ -75,8 +88,4 @@ function build_cshim(;
     end
     println("Successfully built $out_lib")
     return out_lib
-end
-
-if abspath(PROGRAM_FILE) == @__FILE__
-    build_cshim()
 end

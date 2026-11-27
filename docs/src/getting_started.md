@@ -2,11 +2,11 @@
 
 ## Installation
 
-`AMReX.jl` uses `AMReX_jll` and `CxxWrap.jl` to compile a lightweight C++ shim (`libamrex_jl_shim.so`) automatically upon first load or package build.
+`AMReX.jl` uses `AMReX_jll` and `CxxWrap.jl` to compile a lightweight C++20 shim (`libamrex_jl_shim.so`) into `Scratch.jl` storage automatically upon first load (requiring a C++20 compiler with OpenMP support, defaulting to `g++` via `ENV["CXX"]`).
 
 ```julia
 using Pkg
-Pkg.develop(path="/path/to/AMReX.jl")
+Pkg.add("AMReX")
 ```
 
 ## Runtime Lifecycle
