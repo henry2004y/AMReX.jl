@@ -66,10 +66,21 @@ function _find_mpiexec()
     return Cmd([get(ENV, "JULIA_MPIEXEC", "mpiexec")])
 end
 
+function _mpi_julia_cmd(mpi_test_script::String)
+    mpiexec = _find_mpiexec()
+    julia_cmd = `$(Base.julia_cmd()) --project=$(Base.active_project()) $mpi_test_script`
+    if Sys.isunix()
+        ld_key = Sys.isapple() ? "DYLD_FALLBACK_LIBRARY_PATH" : "LD_LIBRARY_PATH"
+        env_prefix = haskey(ENV, ld_key) ? `env $(ld_key)=$(ENV[ld_key])` : `env -u $(ld_key)`
+        return `$mpiexec -n 2 $env_prefix $julia_cmd`
+    end
+    return `$mpiexec -n 2 $julia_cmd`
+end
+
 if should_run_suite("mpi", TEST_FILTERS)
     @testset "2-Process MPI Subprocess Suite" begin
         mpi_test_script = joinpath(@__DIR__, "test_mpi.jl")
-        cmd = `$(_find_mpiexec()) -n 2 $(Base.julia_cmd()) --project=$(Base.active_project()) $mpi_test_script`
+        cmd = _mpi_julia_cmd(mpi_test_script)
         @test success(pipeline(cmd; stdout = stdout, stderr = stderr))
     end
 end
