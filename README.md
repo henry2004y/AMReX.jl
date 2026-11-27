@@ -89,9 +89,11 @@ You can launch multi-process MPI scripts using the MPICH `mpiexec` bundled with 
 ```bash
 julia --project=AMReX.jl -e '
 using AMReX_jll
-run(`$(AMReX_jll.MPICH_jll.mpiexec()) -n 2 $(Base.julia_cmd()) --project=AMReX.jl my_script.jl`)
+run(`$(AMReX_jll.MPICH_jll.mpiexec()) -n 2 env -u LD_LIBRARY_PATH $(Base.julia_cmd()) --project=AMReX.jl my_script.jl`)
 '
 ```
+
+> **Note**: Prefixing the spawned Julia command with `env -u LD_LIBRARY_PATH` (or restoring your shell's `LD_LIBRARY_PATH`) prevents `JLLWrappers`'s `lib/julia` path from leaking into child Julia processes and causing `CXXABI` mismatches on Julia 1.11.
 
 ## Running the Test Suite
 
